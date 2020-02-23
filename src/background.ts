@@ -5,9 +5,9 @@ import {
   createProtocol
   /* installVueDevtools */
 } from 'vue-cli-plugin-electron-builder/lib'
-const isDevelopment = process.env.NODE_ENV !== 'production'
 
 import { menubar } from 'menubar'
+const isDevelopment = process.env.NODE_ENV !== 'production'
 
 // Keep a global reference of the window object, if you don't, the window will
 // be closed automatically when the JavaScript object is garbage collected.
@@ -17,57 +17,57 @@ let win: BrowserWindow | null
 protocol.registerSchemesAsPrivileged([{ scheme: 'app', privileges: { secure: true, standard: true } }])
 
 function createWindow () {
-    // // Create the browser window.
-    // win = new BrowserWindow({
-    //     width: 800,
-    //     height: 600,
-    //     webPreferences: {
-    //         nodeIntegration: true
-    //     },
-    //     show: false,
-    //     frame: false,
-    //     resizable: false,
-    // })
+  // // Create the browser window.
+  // win = new BrowserWindow({
+  //     width: 800,
+  //     height: 600,
+  //     webPreferences: {
+  //         nodeIntegration: true
+  //     },
+  //     show: false,
+  //     frame: false,
+  //     resizable: false,
+  // })
 
-    // if (process.env.WEBPACK_DEV_SERVER_URL) {
-    //     // Load the url of the dev server if in development mode
-    //     win.loadURL(process.env.WEBPACK_DEV_SERVER_URL as string)
-    //     if (!process.env.IS_TEST) win.webContents.openDevTools()
-    // } else {
-    //     createProtocol('app')
-    //     // Load the index.html when not in development
-    //     win.loadURL('app://./index.html')
-    // }
+  // if (process.env.WEBPACK_DEV_SERVER_URL) {
+  //     // Load the url of the dev server if in development mode
+  //     win.loadURL(process.env.WEBPACK_DEV_SERVER_URL as string)
+  //     if (!process.env.IS_TEST) win.webContents.openDevTools()
+  // } else {
+  //     createProtocol('app')
+  //     // Load the index.html when not in development
+  //     win.loadURL('app://./index.html')
+  // }
 
-    // win.on('closed', () => {
-    //     win = null
-    // })
+  // win.on('closed', () => {
+  //     win = null
+  // })
 
-    let config = {
-        url: 'app://./index.html',
+  const config = {
+    url: 'app://./index.html'
+  }
+
+  if (process.env.WEBPACK_DEV_SERVER_URL) {
+    config.url = process.env.WEBPACK_DEV_SERVER_URL as string
+  } else {
+    createProtocol('app')
+  }
+
+  const mb = menubar({
+    icon: 'public/IconTemplate.png',
+    tooltip: 'EIR',
+    index: config.url,
+    preloadWindow: true,
+    browserWindow: {
+      webPreferences: {
+        nodeIntegration: true
+      }
     }
+  })
 
-    if (process.env.WEBPACK_DEV_SERVER_URL) {
-        config.url = process.env.WEBPACK_DEV_SERVER_URL as string;
-    } else {
-        createProtocol('app')
-    }
-
-    const mb = menubar({
-        icon: "public/IconTemplate.png",
-        tooltip: "EIR",
-        index: config.url,
-        preloadWindow: true,
-        browserWindow: {
-            webPreferences: {
-                nodeIntegration: true,
-            },
-        },
-    })
-
-    mb.on('ready', () => {
-        // your app code here
-    })
+  mb.on('ready', () => {
+    // your app code here
+  })
 }
 
 // Quit when all windows are closed.
