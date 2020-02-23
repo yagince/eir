@@ -54,7 +54,8 @@ function createWindow () {
     }
 
     const mb = menubar({
-        icon: "src/assets/logo.png",
+        icon: "public/IconTemplate.png",
+        tooltip: "EIR",
         index: config.url,
         preloadWindow: true,
         browserWindow: {

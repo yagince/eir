@@ -1,6 +1,5 @@
 <template>
-<div id="app">
-  Hogehoge
+  <div id="app">
     <img alt="Vue logo" src="./assets/logo.png">
     <HelloWorld msg="Eir"/>
   </div>
