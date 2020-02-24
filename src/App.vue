@@ -1,15 +1,12 @@
 <template>
 <v-app>
-  <v-app-bar
-    app
-    color="dark"
+  <v-system-bar
     dark
-    dense
     hide-on-scroll
+    dense
     >
-    <v-app-bar-nav-icon @click="navigation = true"></v-app-bar-nav-icon>
-    <v-toolbar-title>EIR</v-toolbar-title>
-  </v-app-bar>
+    <v-icon @click="navigation = true">mdi-dots-vertical</v-icon>
+  </v-system-bar>
 
   <v-navigation-drawer
     v-model="navigation"
@@ -42,21 +39,19 @@
   </v-navigation-drawer>
 
   <v-content>
-    <HelloWorld/>
+    <router-view/>
   </v-content>
 </v-app>
 </template>
 
 <script lang="ts">
 import { Component, Vue } from 'vue-property-decorator'
-import HelloWorld from './components/HelloWorld.vue'
 
 @Component({
   components: {
-    HelloWorld
   }
 })
 export default class App extends Vue {
-  navigation: bool = false
+  navigation = false
 }
 </script>
