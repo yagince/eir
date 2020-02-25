@@ -13,12 +13,24 @@
 
 <script lang="ts">
 import { Component, Vue } from 'vue-property-decorator'
+import { getModule } from 'vuex-module-decorators'
+import GeneralStore from '@/store/modules/general'
 
 @Component({
   components: {
   }
 })
 export default class Settings extends Vue {
-  token = ''
+  store (): GeneralStore {
+    return getModule(GeneralStore, this.$store)
+  }
+
+  get token (): string {
+    return this.store().token
+  }
+
+  set token (value: string) {
+    this.store().setToken(value)
+  }
 }
 </script>
