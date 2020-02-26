@@ -17,6 +17,10 @@ export default new Router({
       path: '/settings',
       name: 'settings',
       component: Settings
+    },
+    {
+      path: '*',
+      redirect: { name: 'home' }
     }
   ]
 })
