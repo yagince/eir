@@ -16,9 +16,7 @@
       nav
       dense
       >
-      <v-list-item-group
-        active-class="deep-purple--text text--accent-4"
-        >
+      <v-list-item-group>
         <v-list-item :to="{ name: 'home' }">
           <v-list-item-icon>
             <v-icon>mdi-home</v-icon>
