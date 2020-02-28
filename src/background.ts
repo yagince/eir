@@ -67,7 +67,7 @@ function createWindow () {
 
   mb.on('ready', () => {
     // your app code here
-    // mb.window.webContents.openDevTools()
+    mb.window.webContents.openDevTools()
   })
 }
 
