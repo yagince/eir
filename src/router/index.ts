@@ -1,6 +1,7 @@
 import Vue from 'vue'
 import Router from 'vue-router'
 import HelloWorld from '@/components/HelloWorld.vue'
+import PullRequests from '@/components/PullRequests.vue'
 import Settings from '@/components/Settings.vue'
 
 Vue.use(Router)
@@ -11,7 +12,7 @@ export default new Router({
     {
       path: '/home',
       name: 'home',
-      component: HelloWorld
+      component: PullRequests
     },
     {
       path: '/settings',
