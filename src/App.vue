@@ -44,6 +44,9 @@
 
 <script lang="ts">
 import { Component, Vue } from 'vue-property-decorator'
+import PullRequestStore from '@/store/modules/pullRequests'
+import GeneralStore from '@/store/modules/general'
+import Github from '@/github'
 
 @Component({
   components: {
@@ -51,5 +54,19 @@ import { Component, Vue } from 'vue-property-decorator'
 })
 export default class App extends Vue {
   navigation = false
+  intervalId = 0
+  interval = 10000
+  loading = false
+
+  mounted () {
+    for (let i = 1; i < 99999; i++) {
+      window.clearInterval(i)
+    }
+
+    console.log(PullRequestStore.pullRequests)
+    // this.intervalId = window.setInterval(() => {
+    PullRequestStore.fetch(GeneralStore.token)
+    // }, this.interval)
+  }
 }
 </script>

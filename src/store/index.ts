@@ -1,20 +1,14 @@
 import Vue from 'vue'
 import Vuex from 'vuex'
-import createPersistedState from 'vuex-persistedstate'
-
+import VuexPersistence from 'vuex-persist'
 import GeneralStore from './modules/general'
 
 Vue.use(Vuex)
 
+const vuexLocal = new VuexPersistence({
+  storage: window.localStorage
+})
+
 export default new Vuex.Store({
-  state: {
-  },
-  mutations: {
-  },
-  actions: {
-  },
-  modules: {
-    GeneralStore
-  },
-  plugins: [createPersistedState()]
+  plugins: [vuexLocal.plugin]
 })

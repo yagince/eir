@@ -1,11 +1,13 @@
-import { Module, VuexModule, Mutation } from 'vuex-module-decorators'
+import { Module, VuexModule, Mutation, getModule } from 'vuex-module-decorators'
+import store from '@/store'
 
 @Module({
-  name: 'GeneralStore',
-  namespaced: true,
-  stateFactory: true
+  name: 'general',
+  dynamic: true,
+  store: store,
+  preserveState: true
 })
-export default class GeneralStore extends VuexModule {
+class GeneralStore extends VuexModule {
   public token = 'TOKEN'
 
   @Mutation
@@ -13,3 +15,5 @@ export default class GeneralStore extends VuexModule {
     this.token = val
   }
 }
+
+export default getModule(GeneralStore)

@@ -30,7 +30,6 @@
 
 <script lang="ts">
 import { Component, Vue } from 'vue-property-decorator'
-import { getModule } from 'vuex-module-decorators'
 import GeneralStore from '@/store/modules/general'
 import Github from '@/github'
 import electron from 'electron'
@@ -47,17 +46,13 @@ export default class Settings extends Vue {
     this.fetchUser(this.token)
   }
 
-  store (): GeneralStore {
-    return getModule(GeneralStore, this.$store)
-  }
-
   get token (): string {
-    return this.store().token
+    return GeneralStore.token
   }
 
   set token (value: string) {
     this.fetchUser(value)
-    this.store().setToken(value)
+    GeneralStore.setToken(value)
   }
 
   async fetchUser (token: string) {
