@@ -5,6 +5,7 @@
     dense
     >
     <v-icon @click="navigation = true">mdi-dots-vertical</v-icon>
+    <v-icon @click="reload()">mdi-reload</v-icon>
   </v-system-bar>
 
   <v-navigation-drawer
@@ -63,10 +64,14 @@ export default class App extends Vue {
       window.clearInterval(i)
     }
 
-    console.log(PullRequestStore.pullRequests)
     // this.intervalId = window.setInterval(() => {
-    PullRequestStore.fetch(GeneralStore.token)
+    this.reload()
     // }, this.interval)
+  }
+
+  reload () {
+    console.log(PullRequestStore.pullRequests)
+    PullRequestStore.fetch(GeneralStore.token)
   }
 }
 </script>
