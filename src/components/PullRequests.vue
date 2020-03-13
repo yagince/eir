@@ -4,7 +4,7 @@
     <v-icon x-large>fas fa-circle-notch fa-spin</v-icon>
   </div>
   <v-list v-else three-line>
-      <v-list-item :key="pull.title" ripple link v-for="pull in pullRequests">
+      <v-list-item dense :key="pull.title" ripple link v-for="pull in pullRequests">
         <v-list-item-avatar>
           <v-img :src="pull.user.avatar_url"/>
         </v-list-item-avatar>
@@ -18,6 +18,11 @@
               {{ pull.body }}
             </p>
           </v-list-item-subtitle>
+          <div>
+            <v-chip label x-small :color="labelColorCode(label)" :key="label.id" v-for="label in pull.labels">
+              {{ label.name }}
+            </v-chip>
+          </div>
         </v-list-item-content>
       </v-list-item>
   </v-list>
@@ -42,6 +47,10 @@ export default class PullRequests extends Vue {
 
   get pullRequestCount () {
     return Object.values(this.pullRequests).length
+  }
+
+  labelColorCode (label: {color: string}): string {
+    return `#${label.color}`
   }
 }
 </script>

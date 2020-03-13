@@ -67,9 +67,8 @@ function createWindow () {
 
   mb.on('ready', () => {
     // your app code here
-    if (mb) {
-      mb.window.webContents.openDevTools()
-    }
+    // eslint-disable-next-line
+    mb.window.webContents.openDevTools()
   })
 }
 
