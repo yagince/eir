@@ -1,3 +1,4 @@
+/* eslint @typescript-eslint/camelcase: ["error", {properties: "never"}] */
 import { Octokit } from '@octokit/core'
 import { Octokit as OctokitRest } from '@octokit/rest'
 
@@ -32,6 +33,11 @@ export default class Github {
     for await (const res of this.client.paginate.iterator(this.client.repos.list.endpoint())) {
       for (const repo of res.data) {
         const { data: repoPulls } = await this.client.pulls.list({ owner: repo.owner.login, repo: repo.name })
+
+        for (const pull of repoPulls) {
+          pull.issue = await this.issue(pull)
+        }
+
         pulls[repo.full_name] = {
           repo: repo,
           pulls: repoPulls
@@ -40,5 +46,14 @@ export default class Github {
     }
 
     return pulls
+  }
+
+  async issue (pull: { number: number; base: { repo: { owner: { login: string }; name: string } } }) {
+    const { data } = await this.client.issues.get({
+      owner: pull.base.repo.owner.login,
+      repo: pull.base.repo.name,
+      issue_number: pull.number
+    })
+    return data
   }
 }

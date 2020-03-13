@@ -4,27 +4,37 @@
     <v-icon x-large>fas fa-circle-notch fa-spin</v-icon>
   </div>
   <v-list v-else three-line>
-      <v-list-item dense :key="pull.title" ripple link v-for="pull in pullRequests">
+    <v-list-item dense :key="pull.title" ripple link v-for="pull in pullRequests">
+      <v-badge
+        :content="pull.issue.comments"
+        :value="pull.issue.comments"
+        overlap
+        offset-x="30"
+        offset-y="30"
+        >
         <v-list-item-avatar>
-          <v-img :src="pull.user.avatar_url"/>
+          <v-avatar>
+            <v-img :src="pull.user.avatar_url"/>
+          </v-avatar>
         </v-list-item-avatar>
-        <v-list-item-content>
-          <v-list-item-title v-html="pull.title"/>
-          <v-list-item-subtitle>
-            <p class="text--primary">
-              {{ pull.head.repo.full_name }}
-            </p>
-            <p>
-              {{ pull.body }}
-            </p>
-          </v-list-item-subtitle>
-          <div>
-            <v-chip label x-small :color="labelColorCode(label)" :key="label.id" v-for="label in pull.labels">
-              {{ label.name }}
-            </v-chip>
-          </div>
-        </v-list-item-content>
-      </v-list-item>
+      </v-badge>
+      <v-list-item-content>
+        <v-list-item-title v-html="pull.title"/>
+        <v-list-item-subtitle>
+          <p class="text--primary">
+            {{ pull.head.repo.full_name }}
+          </p>
+          <p>
+            {{ pull.body }}
+          </p>
+        </v-list-item-subtitle>
+        <div>
+          <v-chip label x-small :color="labelColorCode(label)" :key="label.id" v-for="label in pull.labels">
+            {{ label.name }}
+          </v-chip>
+        </div>
+      </v-list-item-content>
+    </v-list-item>
   </v-list>
 </v-container>
 </template>
