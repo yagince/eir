@@ -21,12 +21,13 @@
       <v-list-item-content>
         <v-list-item-title v-html="pull.title"/>
         <v-list-item-subtitle>
-          <p class="text--primary">
+          <div>{{ labelRelativeDate(pull.created_at) }}</div>
+          <div class="text--primary">
             {{ pull.head.repo.full_name }}
-          </p>
-          <p>
+          </div>
+          <div>
             {{ pull.body }}
-          </p>
+          </div>
         </v-list-item-subtitle>
         <div>
           <v-chip label x-small :color="labelColorCode(label)" :key="label.id" v-for="label in pull.labels">
@@ -42,7 +43,7 @@
 <script lang="ts">
 import { Component, Vue } from 'vue-property-decorator'
 import PullRequestStore from '@/store/modules/pullRequests'
-// import Github from '@/github'
+import moment from 'moment'
 
 @Component({
   components: {
@@ -61,6 +62,10 @@ export default class PullRequests extends Vue {
 
   labelColorCode (label: {color: string}): string {
     return `#${label.color}`
+  }
+
+  labelRelativeDate (date: string): string {
+    return moment(date).fromNow()
   }
 }
 </script>
