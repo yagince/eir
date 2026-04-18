@@ -33,14 +33,17 @@
   let copied = $state(false);
 
   onMount(async () => {
-    if (await invoke<boolean>("is_authenticated")) {
-      await loadItems();
+    try {
+      items = await invoke<WatchedItem[]>("fetch_watched");
+      phase = "loaded";
+    } catch {
+      // stay on idle when not authenticated or fetch fails
     }
   });
 
   async function signIn() {
     error = null;
-    await invoke("set_auto_hide", { enabled: false });
+    await invoke("set_window_pinned", { pinned: true });
     try {
       const code = await invoke<DeviceCode>("start_device_flow");
       deviceCode = code;
@@ -48,7 +51,7 @@
       try {
         await navigator.clipboard.writeText(code.user_code);
         copied = true;
-        await invoke("set_auto_hide", { enabled: true });
+        await invoke("set_window_pinned", { pinned: false });
       } catch {
         copied = false;
       }
@@ -64,7 +67,7 @@
       error = String(e);
       phase = "idle";
       deviceCode = null;
-      await invoke("set_auto_hide", { enabled: true });
+      await invoke("set_window_pinned", { pinned: false });
     }
   }
 
@@ -92,7 +95,7 @@
     try {
       await navigator.clipboard.writeText(deviceCode.user_code);
       copied = true;
-      await invoke("set_auto_hide", { enabled: true });
+      await invoke("set_window_pinned", { pinned: false });
     } catch (e) {
       error = `copy failed: ${e}`;
     }
@@ -125,15 +128,16 @@
       {/if}
     </section>
   {:else if phase === "pending" && deviceCode}
+    {@const dc = deviceCode}
     <section class="device">
       <p class="hint">Enter this code on GitHub:</p>
       <button class="code" onclick={copyCode} title="Click to copy">
-        {deviceCode.user_code}
+        {dc.user_code}
       </button>
       <p class="copy-status" class:ok={copied}>
         {copied ? "✓ Copied to clipboard" : "Tap to copy"}
       </p>
-      <button class="secondary" onclick={() => openUrl(deviceCode!.verification_uri)}>
+      <button class="secondary" onclick={() => openUrl(dc.verification_uri)}>
         Open GitHub again
       </button>
       <p class="waiting">Waiting for authorization…</p>
