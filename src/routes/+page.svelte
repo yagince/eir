@@ -16,6 +16,8 @@
     repo: string;
     url: string;
     author: string;
+    author_avatar: string;
+    comments: number;
     updated_at: string;
     state: string;
   };
@@ -456,9 +458,23 @@
                     <span class="body">
                       <span class="title">{item.title}</span>
                       <span class="meta">
-                        #{item.number} · {item.author} · {relativeTime(
-                          item.updated_at,
-                        )}
+                        <img
+                          class="avatar"
+                          src={item.author_avatar}
+                          alt=""
+                          loading="lazy"
+                        />
+                        <span class="author">{item.author}</span>
+                        <span class="sep">·</span>
+                        <span>#{item.number}</span>
+                        <span class="sep">·</span>
+                        <span>{relativeTime(item.updated_at)}</span>
+                        {#if item.comments > 0}
+                          <span class="sep">·</span>
+                          <span class="comments" title="Comments">
+                            💬 {item.comments}
+                          </span>
+                        {/if}
                       </span>
                     </span>
                   </button>
@@ -870,6 +886,35 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .avatar {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    background: rgba(0, 0, 0, 0.05);
+  }
+
+  .author {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 1;
+    min-width: 0;
+  }
+
+  .sep {
+    flex-shrink: 0;
+    opacity: 0.6;
+  }
+
+  .comments {
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
   }
 
   footer {

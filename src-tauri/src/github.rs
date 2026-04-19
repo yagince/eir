@@ -35,6 +35,8 @@ pub struct WatchedItem {
     repo: String,
     url: String,
     author: String,
+    author_avatar: String,
+    comments: u32,
     updated_at: String,
     state: &'static str,
 }
@@ -100,7 +102,9 @@ pub async fn fetch_watched(
                 number: issue.number,
                 repo,
                 url: issue.html_url.to_string(),
-                author: issue.user.login,
+                author: issue.user.login.clone(),
+                author_avatar: issue.user.avatar_url.to_string(),
+                comments: issue.comments,
                 updated_at: issue.updated_at.to_rfc3339(),
                 state,
             }
