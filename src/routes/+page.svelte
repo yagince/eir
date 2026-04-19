@@ -150,9 +150,16 @@
         const fresh = fetchedNotifs.filter(
           (n) => !prevThreadIds.has(n.thread_id),
         );
+        console.info(
+          `[eir] refresh: ${fetchedNotifs.length} unread notifications, ${fresh.length} new since last fetch`,
+        );
         if (fresh.length > 0) {
           await notify(fresh);
         }
+      } else {
+        console.info(
+          `[eir] initial load: ${fetchedNotifs.length} unread notifications (suppressed)`,
+        );
       }
 
       items = fetchedItems;
@@ -208,11 +215,21 @@
   }
 
   async function notify(fresh: NotificationItem[]) {
-    if (!notifyEnabled) return;
-    if (!(await ensureNotificationPermission())) return;
+    if (!notifyEnabled) {
+      console.info("[eir] notify skipped: notifications disabled in settings");
+      return;
+    }
+    if (!(await ensureNotificationPermission())) {
+      console.warn(
+        "[eir] notify skipped: OS notification permission not granted",
+      );
+      return;
+    }
     for (const n of fresh) {
-      const suffix =
-        n.number != null ? `${n.repo}#${n.number}` : n.repo;
+      const suffix = n.number != null ? `${n.repo}#${n.number}` : n.repo;
+      console.info(
+        `[eir] sending notification: ${reasonLabel(n.reason)} — ${suffix}`,
+      );
       sendNotification({
         title: reasonLabel(n.reason),
         body: `${suffix} — ${n.title}`,
@@ -220,12 +237,32 @@
     }
   }
 
+  async function sendTestNotification() {
+    if (!(await ensureNotificationPermission())) {
+      error =
+        "OS notification permission not granted. Check System Settings → Notifications → eir.";
+      return;
+    }
+    sendNotification({
+      title: "eir test notification",
+      body: "If you see this, notifications are working.",
+    });
+  }
+
   async function ensureNotificationPermission(): Promise<boolean> {
     if (await isPermissionGranted()) return true;
     return (await requestPermission()) === "granted";
   }
 
-  onMount(() => {
+  onMount(async () => {
+    // Kick the permission dialog early so the first real notification isn't
+    // also the first time the OS is asked — which silently denies in some
+    // cases on macOS dev builds.
+    try {
+      await ensureNotificationPermission();
+    } catch {
+      // ignore
+    }
     void loadItems({ silent: true });
   });
 
@@ -390,6 +427,10 @@
             onchange={(e) => onNotifyChange(e.currentTarget.checked)}
           />
         </label>
+        <div class="setting-row">
+          <span class="setting-label">Test notification</span>
+          <button class="secondary" onclick={sendTestNotification}>Send</button>
+        </div>
         <p class="setting-hint">
           Toggle popup: <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd>
         </p>
