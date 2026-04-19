@@ -70,3 +70,89 @@ export function repoSuggestionsFrom(
   }
   return [...seen].sort();
 }
+
+export type ItemChange = {
+  item: WatchedItem;
+  reason: string;
+};
+
+/**
+ * Compare a previous snapshot of the item list against a fresh fetch and
+ * produce one ItemChange per item that meaningfully moved (new entries, or
+ * anything describeItemChange cares about). Items whose (repo, kind, number)
+ * is already covered by a GitHub notification thread in `notifiedKeys` are
+ * skipped — the /notifications diff gets first dibs on surfacing them, so
+ * we don't fire two desktop notifications for the same underlying event.
+ */
+export function computeItemChanges(
+  prevItems: ReadonlyMap<number, WatchedItem>,
+  currItems: readonly WatchedItem[],
+  notifiedKeys: ReadonlySet<string>,
+): ItemChange[] {
+  const out: ItemChange[] = [];
+  for (const item of currItems) {
+    if (notifiedKeys.has(itemKey(item))) continue;
+    const prev = prevItems.get(item.id);
+    if (!prev) {
+      out.push({ item, reason: "New in list" });
+      continue;
+    }
+    const reason = describeItemChange(prev, item);
+    if (reason) out.push({ item, reason });
+  }
+  return out;
+}
+
+/**
+ * Describe what meaningfully changed between two snapshots of the same item,
+ * as a short phrase suitable for a desktop-notification title. Returns null
+ * when nothing interesting changed (i.e. not worth notifying about).
+ *
+ * Order matters — we return the first signal we find, roughly ranked by how
+ * actionable the change is: CI failures are louder than a label tweak.
+ */
+export function describeItemChange(
+  prev: WatchedItem,
+  curr: WatchedItem,
+): string | null {
+  // PR state transitions (merged / closed / reopened) are the biggest news.
+  if (prev.state !== curr.state) {
+    return `Now ${curr.state}`;
+  }
+
+  // Draft ⇄ ready is a reviewer-relevant flip.
+  if (prev.is_draft !== curr.is_draft) {
+    return curr.is_draft ? "Marked as draft" : "Ready for review";
+  }
+
+  // CI state change (includes success after a red build — also worth hearing).
+  if (prev.ci_status !== curr.ci_status) {
+    return `CI ${curr.ci_status ?? "unknown"}`;
+  }
+
+  // Review-state change for any reviewer. Prefer the first non-matching one
+  // to keep the output short; the full state lives in the app itself.
+  const prevByLogin = new Map(
+    prev.reviewers.map((r) => [r.login, r.state] as const),
+  );
+  for (const r of curr.reviewers) {
+    if (prevByLogin.get(r.login) !== r.state) {
+      return `${r.login} ${r.state.replace("_", " ")}`;
+    }
+  }
+
+  // Comment count went up — someone commented.
+  if (curr.comments > prev.comments) {
+    const delta = curr.comments - prev.comments;
+    return `+${delta} comment${delta === 1 ? "" : "s"}`;
+  }
+
+  // Nothing above matched but updated_at moved — some edit happened we don't
+  // model (labels, assignees, etc). Worth a quiet catch-all notification so
+  // the user knows something changed upstream.
+  if (prev.updated_at !== curr.updated_at) {
+    return "Updated";
+  }
+
+  return null;
+}
