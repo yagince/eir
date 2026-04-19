@@ -21,6 +21,7 @@ pub fn set_tray_badge(count: u32, has_unread: bool, app: tauri::AppHandle) {
         } else {
             Some(format!(" {count}"))
         };
+        eprintln!("[eir] set_tray_badge count={count} has_unread={has_unread} title={title:?}");
         let _ = tray.set_title(title);
     }
 }

@@ -8,6 +8,14 @@
   } from "@tauri-apps/plugin-notification";
   import { onDestroy, onMount } from "svelte";
 
+  type Reviewer = {
+    login: string;
+    avatar_url: string;
+    state: "approved" | "changes_requested" | "pending";
+  };
+
+  type CiStatus = "success" | "pending" | "failure" | "error" | "unknown";
+
   type WatchedItem = {
     id: number;
     kind: "pr" | "issue";
@@ -20,6 +28,8 @@
     comments: number;
     updated_at: string;
     state: string;
+    reviewers: Reviewer[];
+    ci_status: CiStatus | null;
   };
 
   type NotificationItem = {
@@ -111,8 +121,13 @@
 
   function updateBadge() {
     const count = items.length;
-    const hasUnread = items.some((i) => notificationsByKey.has(itemKey(i)));
-    console.info(`[eir] tray badge → count=${count} hasUnread=${hasUnread}`);
+    const matched = items.filter((i) => notificationsByKey.has(itemKey(i)));
+    const hasUnread = matched.length > 0;
+    console.info(
+      `[eir] tray badge → count=${count} hasUnread=${hasUnread} matched=${matched
+        .map((i) => `${i.repo}#${i.number}`)
+        .join(",")} notifKeys=${[...notificationsByKey.keys()].join(",")}`,
+    );
     void invoke("set_tray_badge", { count, hasUnread });
   }
 
@@ -524,7 +539,32 @@
                             💬 {item.comments}
                           </span>
                         {/if}
+                        {#if item.ci_status && item.ci_status !== "unknown"}
+                          <span class="sep">·</span>
+                          <span
+                            class="ci ci-{item.ci_status}"
+                            title="CI: {item.ci_status}"
+                          >
+                            {#if item.ci_status === "success"}✓{:else if item.ci_status === "failure" || item.ci_status === "error"}✗{:else}⏱{/if}
+                          </span>
+                        {/if}
                       </span>
+                      {#if item.reviewers.length > 0}
+                        <span class="reviewers">
+                          {#each item.reviewers as r (r.login)}
+                            <img
+                              class="reviewer reviewer-{r.state}"
+                              src={r.avatar_url}
+                              alt=""
+                              loading="lazy"
+                              title="{r.login}: {r.state.replace(
+                                '_',
+                                ' ',
+                              )}"
+                            />
+                          {/each}
+                        </span>
+                      {/if}
                     </span>
                   </button>
                 </li>
@@ -964,6 +1004,51 @@
   .comments {
     flex-shrink: 0;
     font-variant-numeric: tabular-nums;
+  }
+
+  .ci {
+    flex-shrink: 0;
+    font-weight: 600;
+  }
+
+  .ci-success {
+    color: #1a7f37;
+  }
+
+  .ci-failure,
+  .ci-error {
+    color: #d1242f;
+  }
+
+  .ci-pending {
+    color: #9a6700;
+  }
+
+  .reviewers {
+    display: flex;
+    gap: 2px;
+    margin-top: 2px;
+    flex-wrap: wrap;
+  }
+
+  .reviewer {
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    box-sizing: content-box;
+  }
+
+  .reviewer-approved {
+    border-color: #1a7f37;
+  }
+
+  .reviewer-changes_requested {
+    border-color: #d1242f;
+  }
+
+  .reviewer-pending {
+    border-color: #9a6700;
   }
 
   footer {
