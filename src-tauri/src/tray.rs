@@ -9,10 +9,15 @@ const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray-icon.png");
 const TRAY_ID: &str = "main";
 
 #[tauri::command]
-pub fn set_tray_badge(count: u32, app: tauri::AppHandle) {
+pub fn set_tray_badge(count: u32, has_unread: bool, app: tauri::AppHandle) {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         let title = if count == 0 {
             None
+        } else if has_unread {
+            // Red-dot emoji prefix stands in for colored text: macOS tray
+            // titles are plain strings (no NSAttributedString via tauri),
+            // so we flag "unread exists" with a visible glyph instead.
+            Some(format!(" 🔴 {count}"))
         } else {
             Some(format!(" {count}"))
         };

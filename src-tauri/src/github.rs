@@ -165,7 +165,7 @@ pub async fn fetch_notifications(
         .notifications()
         .list()
         .all(false)
-        .per_page(50)
+        .per_page(100)
         .send()
         .await
     {

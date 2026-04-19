@@ -73,7 +73,7 @@
   let notifyEnabled = $state<boolean>(loadNotifyFromStorage());
   let notifications = $state<NotificationItem[]>([]);
 
-  let prevThreadIds = new Set<number>();
+  let prevThreads = new Map<number, string>();
   let hasLoadedOnce = false;
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -110,7 +110,10 @@
   });
 
   function updateBadge() {
-    void invoke("set_tray_badge", { count: notifications.length });
+    const count = items.length;
+    const hasUnread = items.some((i) => notificationsByKey.has(itemKey(i)));
+    console.info(`[eir] tray badge → count=${count} hasUnread=${hasUnread}`);
+    void invoke("set_tray_badge", { count, hasUnread });
   }
 
   function startRefresh() {
@@ -144,14 +147,19 @@
         invoke<NotificationItem[]>("fetch_notifications"),
       ]);
 
-      const nextThreadIds = new Set(fetchedNotifs.map((n) => n.thread_id));
+      const nextThreads = new Map(
+        fetchedNotifs.map((n) => [n.thread_id, n.updated_at] as const),
+      );
 
       if (hasLoadedOnce) {
+        // A thread is "fresh" if we've never seen it before, or if its
+        // updated_at has advanced — comments and other activity bump
+        // updated_at on the same thread_id.
         const fresh = fetchedNotifs.filter(
-          (n) => !prevThreadIds.has(n.thread_id),
+          (n) => prevThreads.get(n.thread_id) !== n.updated_at,
         );
         console.info(
-          `[eir] refresh: ${fetchedNotifs.length} unread notifications, ${fresh.length} new since last fetch`,
+          `[eir] refresh: ${fetchedNotifs.length} unread notifications, ${fresh.length} new or updated since last fetch`,
         );
         if (fresh.length > 0) {
           await notify(fresh);
@@ -164,7 +172,7 @@
 
       items = fetchedItems;
       notifications = fetchedNotifs;
-      prevThreadIds = nextThreadIds;
+      prevThreads = nextThreads;
       hasLoadedOnce = true;
       phase = "loaded";
       updateBadge();
@@ -185,7 +193,7 @@
     stopRefresh();
     items = [];
     notifications = [];
-    prevThreadIds = new Set();
+    prevThreads = new Map();
     hasLoadedOnce = false;
     phase = "idle";
     void invoke("set_tray_badge", { count: 0 });
