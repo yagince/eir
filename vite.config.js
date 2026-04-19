@@ -29,4 +29,9 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
+  test: {
+    // Skip Claude's worktree mirrors of this repo; otherwise vitest picks up
+    // their duplicate test files and chokes on the stale tsconfig paths.
+    exclude: ["node_modules", ".claude/**", "src-tauri/**"],
+  },
 }));

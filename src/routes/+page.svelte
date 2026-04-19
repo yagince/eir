@@ -3,9 +3,11 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import {
     isPermissionGranted,
+    onAction as onNotificationAction,
     requestPermission,
     sendNotification,
   } from "@tauri-apps/plugin-notification";
+  import type { PluginListener } from "@tauri-apps/api/core";
   import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
   import { relaunch } from "@tauri-apps/plugin-process";
   import {
@@ -71,6 +73,7 @@
   let capturingShortcut = $state(false);
   let shortcutError = $state<string | null>(null);
   let selectedId = $state<number | null>(null);
+  let notificationActionListener: PluginListener | null = null;
 
   type UpdateStatus =
     | { kind: "idle" }
@@ -324,6 +327,9 @@
       sendNotification({
         title: reason,
         body: `${item.repo}#${item.number} — ${item.title}`,
+        // Carried through to `onAction` so clicking the banner opens the PR
+        // / issue in the browser. See notificationActionListener in onMount.
+        extra: { url: item.url },
       });
     }
   }
@@ -347,6 +353,7 @@
       sendNotification({
         title: reasonLabel(n.reason),
         body: `${suffix} — ${n.title}`,
+        extra: { url: n.url },
       });
     }
   }
@@ -433,6 +440,18 @@
       // keep default
     }
     window.addEventListener("keydown", handleGlobalKey);
+    // Open the PR / issue when the user clicks a desktop notification banner.
+    // The URL rides along in `extra.url` at send time.
+    try {
+      notificationActionListener = await onNotificationAction((notification) => {
+        const url = (notification.extra as { url?: string } | undefined)?.url;
+        if (typeof url === "string" && url.length > 0) {
+          void openUrl(url);
+        }
+      });
+    } catch (e) {
+      console.warn("[eir] notification action listener failed:", e);
+    }
     void loadItems({ silent: true });
     // Silent update check on boot — if a new version is out, the Settings
     // button will show "Update available" and the user can choose to install.
@@ -450,6 +469,7 @@
   onDestroy(() => {
     stopRefresh();
     window.removeEventListener("keydown", handleGlobalKey);
+    notificationActionListener?.unregister().catch(() => {});
   });
 
   function formatShortcut(e: KeyboardEvent): string | null {
