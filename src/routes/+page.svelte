@@ -363,6 +363,13 @@
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       e.preventDefault();
       showingSettings = false;
+      return;
+    }
+
+    // macOS convention: Cmd+, opens the Preferences / Settings pane.
+    if (e.metaKey && e.key === "," && !showingSettings && phase === "loaded") {
+      e.preventDefault();
+      showingSettings = true;
     }
   }
 
@@ -586,7 +593,8 @@
         </div>
 
         <p class="setting-hint">
-          Press <kbd>Backspace</kbd> to go back.
+          <kbd>Cmd</kbd>+<kbd>,</kbd> opens settings ·
+          <kbd>Backspace</kbd> goes back.
         </p>
       </div>
     </section>
