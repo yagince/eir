@@ -21,12 +21,16 @@ pnpm tauri dev
 cd src-tauri && cargo check
 cd src-tauri && cargo clippy --all-targets -- -D warnings
 cd src-tauri && cargo fmt
+cd src-tauri && cargo test --lib
 
 # Frontend-only dev server at :1420 (no Tauri shell)
 pnpm dev
 
 # Frontend type + svelte-check
 pnpm check
+
+# Frontend tests (vitest)
+pnpm test
 
 # Production bundle (.app / .dmg)
 pnpm tauri build

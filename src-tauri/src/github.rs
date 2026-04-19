@@ -32,10 +32,11 @@ fn build_octo(auth: &Mutex<AppState>) -> Result<octocrab::Octocrab, String> {
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize, Clone)]
+#[cfg_attr(test, derive(Debug))]
 pub struct Reviewer {
     login: String,
     avatar_url: String,
-    state: &'static str, // "approved" | "changes_requested" | "pending"
+    state: &'static str, // "approved" | "changes_requested" | "commented" | "dismissed" | "pending"
 }
 
 #[derive(Serialize)]
@@ -557,5 +558,261 @@ pub async fn mark_notification_read(
             }
             Err(err.to_string())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn subject_kind_maps_known_types() {
+        assert_eq!(subject_kind("PullRequest"), "pr");
+        assert_eq!(subject_kind("Issue"), "issue");
+        assert_eq!(subject_kind("Commit"), "commit");
+        assert_eq!(subject_kind("Discussion"), "discussion");
+        assert_eq!(subject_kind("Release"), "release");
+        assert_eq!(subject_kind("Something"), "other");
+    }
+
+    #[test]
+    fn extract_number_parses_last_path_segment() {
+        assert_eq!(
+            extract_number(Some("https://api.github.com/repos/o/r/pulls/123")),
+            Some(123)
+        );
+        assert_eq!(
+            extract_number(Some("https://api.github.com/repos/o/r/issues/7")),
+            Some(7)
+        );
+        assert_eq!(extract_number(None), None);
+        assert_eq!(extract_number(Some("")), None);
+        assert_eq!(extract_number(Some("nonsense")), None);
+    }
+
+    #[test]
+    fn subject_html_url_builds_web_urls_for_pr_and_issue() {
+        assert_eq!(
+            subject_html_url(
+                Some("https://api.github.com/repos/owner/repo/pulls/42"),
+                "owner/repo",
+                "pr",
+                Some(42),
+            ),
+            "https://github.com/owner/repo/pull/42"
+        );
+        assert_eq!(
+            subject_html_url(
+                Some("https://api.github.com/repos/owner/repo/issues/99"),
+                "owner/repo",
+                "issue",
+                Some(99),
+            ),
+            "https://github.com/owner/repo/issues/99"
+        );
+    }
+
+    #[test]
+    fn subject_html_url_falls_back_to_api_url() {
+        assert_eq!(
+            subject_html_url(Some("https://example.com/x"), "o/r", "commit", None),
+            "https://example.com/x"
+        );
+        assert_eq!(subject_html_url(None, "o/r", "other", None), "");
+    }
+
+    #[test]
+    fn map_item_state_handles_all_cases() {
+        assert_eq!(map_item_state("OPEN"), "open");
+        assert_eq!(map_item_state("CLOSED"), "closed");
+        assert_eq!(map_item_state("MERGED"), "merged");
+        assert_eq!(map_item_state("WHAT"), "unknown");
+    }
+
+    #[test]
+    fn map_ci_state_handles_all_cases() {
+        assert_eq!(map_ci_state("SUCCESS"), "success");
+        assert_eq!(map_ci_state("PENDING"), "pending");
+        assert_eq!(map_ci_state("EXPECTED"), "pending");
+        assert_eq!(map_ci_state("FAILURE"), "failure");
+        assert_eq!(map_ci_state("ERROR"), "error");
+        assert_eq!(map_ci_state(""), "unknown");
+    }
+
+    fn make_pr(reviews: serde_json::Value, review_requests: serde_json::Value) -> PrNode {
+        serde_json::from_value(json!({
+            "databaseId": 1,
+            "title": "t",
+            "number": 1,
+            "url": "https://github.com/o/r/pull/1",
+            "updatedAt": "2026-01-01T00:00:00Z",
+            "state": "OPEN",
+            "comments": { "totalCount": 0 },
+            "repository": { "nameWithOwner": "o/r" },
+            "author": { "login": "author", "avatarUrl": "a" },
+            "reviews": { "nodes": reviews },
+            "reviewRequests": { "nodes": review_requests },
+            "commits": { "nodes": [] }
+        }))
+        .expect("valid PrNode")
+    }
+
+    fn find_reviewer<'a>(reviewers: &'a [Reviewer], login: &str) -> &'a Reviewer {
+        reviewers
+            .iter()
+            .find(|r| r.login == login)
+            .unwrap_or_else(|| panic!("no reviewer {login} in {reviewers:?}"))
+    }
+
+    #[test]
+    fn reviewers_approved_overrides_commented() {
+        let pr = make_pr(
+            json!([
+                { "state": "COMMENTED", "author": { "login": "alice", "avatarUrl": "a" } },
+                { "state": "APPROVED",  "author": { "login": "alice", "avatarUrl": "a" } }
+            ]),
+            json!([]),
+        );
+        let item = pr_to_item(pr);
+        assert_eq!(find_reviewer(&item.reviewers, "alice").state, "approved");
+    }
+
+    #[test]
+    fn reviewers_commented_does_not_override_approved() {
+        let pr = make_pr(
+            json!([
+                { "state": "APPROVED",  "author": { "login": "alice", "avatarUrl": "a" } },
+                { "state": "COMMENTED", "author": { "login": "alice", "avatarUrl": "a" } }
+            ]),
+            json!([]),
+        );
+        let item = pr_to_item(pr);
+        assert_eq!(find_reviewer(&item.reviewers, "alice").state, "approved");
+    }
+
+    #[test]
+    fn reviewers_latest_substantive_wins() {
+        let pr = make_pr(
+            json!([
+                { "state": "CHANGES_REQUESTED", "author": { "login": "alice", "avatarUrl": "a" } },
+                { "state": "APPROVED",          "author": { "login": "alice", "avatarUrl": "a" } }
+            ]),
+            json!([]),
+        );
+        let item = pr_to_item(pr);
+        assert_eq!(find_reviewer(&item.reviewers, "alice").state, "approved");
+    }
+
+    #[test]
+    fn reviewers_commented_only_shows_as_commented() {
+        let pr = make_pr(
+            json!([
+                { "state": "COMMENTED", "author": { "login": "alice", "avatarUrl": "a" } }
+            ]),
+            json!([]),
+        );
+        let item = pr_to_item(pr);
+        assert_eq!(find_reviewer(&item.reviewers, "alice").state, "commented");
+    }
+
+    #[test]
+    fn reviewers_dismissed_without_rerequest_stays_dismissed() {
+        let pr = make_pr(
+            json!([
+                { "state": "APPROVED",  "author": { "login": "alice", "avatarUrl": "a" } },
+                { "state": "DISMISSED", "author": { "login": "alice", "avatarUrl": "a" } }
+            ]),
+            json!([]),
+        );
+        let item = pr_to_item(pr);
+        assert_eq!(find_reviewer(&item.reviewers, "alice").state, "dismissed");
+    }
+
+    #[test]
+    fn reviewers_dismissed_plus_rerequest_becomes_pending() {
+        let pr = make_pr(
+            json!([
+                { "state": "DISMISSED", "author": { "login": "alice", "avatarUrl": "a" } }
+            ]),
+            json!([
+                {
+                    "requestedReviewer": {
+                        "__typename": "User",
+                        "login": "alice",
+                        "avatarUrl": "a"
+                    }
+                }
+            ]),
+        );
+        let item = pr_to_item(pr);
+        assert_eq!(find_reviewer(&item.reviewers, "alice").state, "pending");
+    }
+
+    #[test]
+    fn reviewers_approved_plus_rerequest_stays_approved() {
+        let pr = make_pr(
+            json!([
+                { "state": "APPROVED", "author": { "login": "alice", "avatarUrl": "a" } }
+            ]),
+            json!([
+                {
+                    "requestedReviewer": {
+                        "__typename": "User",
+                        "login": "alice",
+                        "avatarUrl": "a"
+                    }
+                }
+            ]),
+        );
+        let item = pr_to_item(pr);
+        assert_eq!(find_reviewer(&item.reviewers, "alice").state, "approved");
+    }
+
+    #[test]
+    fn reviewers_review_request_without_any_review_is_pending() {
+        let pr = make_pr(
+            json!([]),
+            json!([
+                {
+                    "requestedReviewer": {
+                        "__typename": "User",
+                        "login": "bob",
+                        "avatarUrl": "b"
+                    }
+                }
+            ]),
+        );
+        let item = pr_to_item(pr);
+        assert_eq!(find_reviewer(&item.reviewers, "bob").state, "pending");
+    }
+
+    #[test]
+    fn reviewers_team_requests_are_ignored_for_now() {
+        let pr = make_pr(
+            json!([]),
+            json!([
+                {
+                    "requestedReviewer": {
+                        "__typename": "Team",
+                        "name": "backend"
+                    }
+                }
+            ]),
+        );
+        let item = pr_to_item(pr);
+        assert!(item.reviewers.is_empty());
+    }
+
+    #[test]
+    fn pr_to_item_copies_scalar_fields() {
+        let pr = make_pr(json!([]), json!([]));
+        let item = pr_to_item(pr);
+        assert_eq!(item.id, 1);
+        assert_eq!(item.kind, "pr");
+        assert_eq!(item.number, 1);
+        assert_eq!(item.repo, "o/r");
+        assert_eq!(item.state, "open");
+        assert_eq!(item.author, "author");
     }
 }

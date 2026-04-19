@@ -8,46 +8,14 @@
   } from "@tauri-apps/plugin-notification";
   import { onDestroy, onMount } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
-
-  type Reviewer = {
-    login: string;
-    avatar_url: string;
-    state:
-      | "approved"
-      | "changes_requested"
-      | "commented"
-      | "dismissed"
-      | "pending";
-  };
-
-  type CiStatus = "success" | "pending" | "failure" | "error" | "unknown";
-
-  type WatchedItem = {
-    id: number;
-    kind: "pr" | "issue";
-    title: string;
-    number: number;
-    repo: string;
-    url: string;
-    author: string;
-    author_avatar: string;
-    comments: number;
-    updated_at: string;
-    state: string;
-    reviewers: Reviewer[];
-    ci_status: CiStatus | null;
-  };
-
-  type NotificationItem = {
-    thread_id: number;
-    reason: string;
-    repo: string;
-    kind: "pr" | "issue" | "commit" | "discussion" | "release" | "other";
-    number: number | null;
-    title: string;
-    url: string;
-    updated_at: string;
-  };
+  import {
+    filterVisible,
+    groupByRepo,
+    itemKey,
+    relativeTime,
+    repoSuggestionsFrom,
+  } from "$lib/list";
+  import type { NotificationItem, Tab, WatchedItem } from "$lib/types";
 
   type DeviceCode = {
     user_code: string;
@@ -58,7 +26,6 @@
   };
 
   type Phase = "idle" | "pending" | "loaded";
-  type Tab = "all" | "authored" | "review" | "mentions" | "hidden";
 
   const DEFAULT_REFRESH_MS = 60_000;
   const TAB_KEY = "eir.tab";
@@ -149,10 +116,6 @@
 
   function loadNotifyFromStorage(): boolean {
     return localStorage.getItem(NOTIFY_KEY) !== "0";
-  }
-
-  function itemKey(i: Pick<WatchedItem, "repo" | "kind" | "number">): string {
-    return `${i.repo}:${i.kind}:${i.number}`;
   }
 
   const notificationsByKey = $derived.by(() => {
@@ -448,65 +411,21 @@
     await loadItems();
   }
 
-  type RepoGroup = {
-    repo: string;
-    items: WatchedItem[];
-    mostRecent: string;
-    unreadCount: number;
-  };
+  const repoSuggestions = $derived(
+    repoSuggestionsFrom(items, excludedRepos),
+  );
 
-  const repoSuggestions = $derived.by<string[]>(() => {
-    const seen = new Set<string>();
-    for (const item of items) {
-      if (!excludedRepos.has(item.repo)) seen.add(item.repo);
-    }
-    return [...seen].sort();
-  });
+  const visibleItems = $derived(
+    filterVisible(items, {
+      tab: activeTab,
+      excludedRepos,
+      hiddenItems,
+    }),
+  );
 
-  const visibleItems = $derived.by<WatchedItem[]>(() => {
-    if (activeTab === "hidden") {
-      return items.filter((i) => hiddenItems.has(i.id));
-    }
-    return items.filter(
-      (i) => !hiddenItems.has(i.id) && !excludedRepos.has(i.repo),
-    );
-  });
-
-  const groups = $derived.by<RepoGroup[]>(() => {
-    const byRepo = new Map<string, WatchedItem[]>();
-    for (const item of visibleItems) {
-      const bucket = byRepo.get(item.repo);
-      if (bucket) {
-        bucket.push(item);
-      } else {
-        byRepo.set(item.repo, [item]);
-      }
-    }
-    const result: RepoGroup[] = [];
-    for (const [repo, groupItems] of byRepo) {
-      groupItems.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
-      result.push({
-        repo,
-        items: groupItems,
-        mostRecent: groupItems[0].updated_at,
-        unreadCount: groupItems.filter((i) => notificationsByKey.has(itemKey(i)))
-          .length,
-      });
-    }
-    result.sort((a, b) => b.mostRecent.localeCompare(a.mostRecent));
-    return result;
-  });
-
-  function relativeTime(iso: string): string {
-    const diff = Date.now() - new Date(iso).getTime();
-    const m = Math.floor(diff / 60000);
-    if (m < 1) return "just now";
-    if (m < 60) return `${m}m`;
-    const h = Math.floor(m / 60);
-    if (h < 24) return `${h}h`;
-    const d = Math.floor(h / 24);
-    return `${d}d`;
-  }
+  const groups = $derived(
+    groupByRepo(visibleItems, (i) => notificationsByKey.has(itemKey(i))),
+  );
 </script>
 
 <main class="container">
