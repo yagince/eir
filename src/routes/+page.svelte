@@ -429,11 +429,6 @@
 </script>
 
 <main class="container">
-  <header>
-    <h1>eir</h1>
-    <p class="subtitle">GitHub PR / Issue watcher</p>
-  </header>
-
   {#if showingSettings}
     <section class="settings">
       <div class="settings-header">
@@ -533,6 +528,20 @@
       <p class="waiting">Waiting for authorization…</p>
     </section>
   {:else}
+    <header class="toolbar">
+      <button class="refresh" onclick={() => loadItems()} disabled={loading}>
+        {loading ? "Refreshing…" : "Refresh"}
+      </button>
+      <button
+        class="icon-btn"
+        onclick={() => (showingSettings = true)}
+        title="Settings"
+        aria-label="Settings"
+      >
+        ⚙
+      </button>
+      <button class="signout" onclick={signOut}>Sign out</button>
+    </header>
     <nav class="tabs">
       {#each TABS as tab (tab.id)}
         <button
@@ -658,20 +667,6 @@
     {#if error}
       <p class="error">{error}</p>
     {/if}
-    <footer>
-      <button class="refresh" onclick={() => loadItems()} disabled={loading}>
-        {loading ? "Refreshing…" : "Refresh"}
-      </button>
-      <button
-        class="icon-btn"
-        onclick={() => (showingSettings = true)}
-        title="Settings"
-        aria-label="Settings"
-      >
-        ⚙
-      </button>
-      <button class="signout" onclick={signOut}>Sign out</button>
-    </footer>
   {/if}
 </main>
 
@@ -695,23 +690,17 @@
     box-sizing: border-box;
   }
 
-  header {
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-bottom: 8px;
+    margin-bottom: 4px;
     border-bottom: 1px solid rgba(0, 0, 0, 0.08);
-    padding-bottom: 12px;
-    margin-bottom: 12px;
   }
 
-  h1 {
-    margin: 0;
-    font-size: 18px;
-    font-weight: 600;
-    letter-spacing: 0.2px;
-  }
-
-  .subtitle {
-    margin: 2px 0 0;
-    font-size: 12px;
-    color: rgba(27, 27, 31, 0.6);
+  .toolbar .refresh {
+    flex: 1;
   }
 
   .auth,
@@ -1065,13 +1054,15 @@
     font-size: 14px;
     color: rgba(27, 27, 31, 0.5);
     cursor: pointer;
-    opacity: 0;
+    /* No fade transition: with a transition, a row that loses hover
+       briefly overlaps a row that gains it, and several "×" glyphs
+       stack up visually as the cursor travels down the list. */
+    visibility: hidden;
     pointer-events: none;
-    transition: opacity 120ms;
   }
 
   .item-row:hover .row-action {
-    opacity: 1;
+    visibility: visible;
     pointer-events: auto;
   }
 
@@ -1262,25 +1253,12 @@
     text-decoration: line-through;
   }
 
-  footer {
-    margin-top: 8px;
-    padding-top: 8px;
-    border-top: 1px solid rgba(0, 0, 0, 0.08);
-    display: flex;
-    gap: 8px;
-  }
-
-  .refresh {
-    flex: 1;
-  }
-
   @media (prefers-color-scheme: dark) {
     :global(:root) {
       color: #ececef;
       background: rgba(30, 30, 32, 0.98);
     }
-    header,
-    footer,
+    .toolbar,
     .tabs {
       border-color: rgba(255, 255, 255, 0.08);
     }
@@ -1294,7 +1272,6 @@
       background: rgba(9, 105, 218, 0.2);
       color: #58a6ff;
     }
-    .subtitle,
     .meta,
     .hint,
     .waiting,
