@@ -16,6 +16,29 @@ Named after Eir, the Norse goddess of healing. The icon combines a watching eye 
 - **Global shortcut** — `Ctrl+Shift+E` toggles the popup from anywhere
 - **Light/dark aware** — template-mode tray icon and `prefers-color-scheme` styling follow the system
 
+## Install
+
+Download the latest `.dmg` for your Mac from the [Releases page](https://github.com/yagince/eir/releases/latest):
+
+- Apple Silicon (M1/M2/M3/M4): `eir_<version>_aarch64.dmg`
+- Intel: `eir_<version>_x64.dmg`
+
+Open the DMG and drag **eir.app** into `/Applications`.
+
+### First launch on macOS
+
+The bundle is ad-hoc signed (no Apple Developer ID yet), so Gatekeeper will refuse to open it on the first try with a `"eir.app" is damaged and can't be opened` message. Remove the quarantine attribute once:
+
+```bash
+xattr -rd com.apple.quarantine /Applications/eir.app
+```
+
+Then launch it normally. Subsequent launches (including after auto-update) don't need this step.
+
+### Updates
+
+From v0.1.1 onward, eir ships with an in-app updater. Open the popup → gear icon → **Check for updates**. When a newer version is published, it downloads the signed bundle, verifies the ed25519 signature, and relaunches into the new version.
+
 ## Development
 
 ```bash
