@@ -1111,6 +1111,8 @@
   }
 
   .excluded-list .row-action {
+    visibility: visible;
+    pointer-events: auto;
     opacity: 0.6;
   }
 
