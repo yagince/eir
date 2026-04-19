@@ -8,6 +8,7 @@
   } from "@tauri-apps/plugin-notification";
   import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
   import { relaunch } from "@tauri-apps/plugin-process";
+  import { ask, message } from "@tauri-apps/plugin-dialog";
   import {
     disable as disableAutostart,
     enable as enableAutostart,
@@ -98,6 +99,8 @@
     | { kind: "error"; message: string };
   let updateStatus = $state<UpdateStatus>({ kind: "idle" });
   let appVersion = $state<string>("");
+  type PendingUpdate = NonNullable<Awaited<ReturnType<typeof checkForUpdate>>>;
+  let pendingUpdate: PendingUpdate | null = null;
   let autostartEnabled = $state<boolean | null>(null);
   const excludedRepos = new SvelteSet<string>(loadExcludedRepos());
   const hiddenItems = new SvelteSet<number>(loadHiddenItems());
@@ -385,6 +388,18 @@
     }
   }
 
+  async function withPinnedWindow<T>(fn: () => Promise<T>): Promise<T> {
+    // Pin the popup (so focus loss doesn't auto-hide it) AND drop always-on-top
+    // so the native dialog can actually render above the popup instead of
+    // getting buried underneath it.
+    await invoke("set_dialog_mode", { enabled: true });
+    try {
+      return await fn();
+    } finally {
+      await invoke("set_dialog_mode", { enabled: false });
+    }
+  }
+
   async function runUpdateCheck(opts: { interactive: boolean }) {
     if (updateStatus.kind === "checking" || updateStatus.kind === "downloading")
       return;
@@ -392,26 +407,65 @@
     try {
       const update = await checkForUpdate();
       if (!update) {
+        pendingUpdate = null;
         updateStatus = { kind: "up-to-date" };
         console.info("[eir] update check: already latest");
+        if (opts.interactive) {
+          await withPinnedWindow(() =>
+            message(
+              `You're on the latest version${appVersion ? ` (v${appVersion})` : ""}.`,
+              { title: "eir", kind: "info" },
+            ),
+          );
+        }
         return;
       }
       console.info(
         `[eir] update check: ${update.version} available (current ${update.currentVersion})`,
       );
+      pendingUpdate = update;
       updateStatus = { kind: "available", version: update.version };
-      if (!opts.interactive) {
-        // Silent check on boot — just record availability, let the user
-        // click the Settings button when they're ready. No auto-install.
-        return;
+      if (!opts.interactive && notifyEnabled) {
+        // Silent check on boot — let the user know via a desktop notification
+        // that a new version is ready. They decide whether to install from
+        // Settings; we never auto-install.
+        try {
+          if (await ensureNotificationPermission()) {
+            showNotification(
+              "eir update available",
+              `Version ${update.version} is ready. Open Settings to install.`,
+            );
+          }
+        } catch {
+          // ignore
+        }
       }
-      updateStatus = { kind: "downloading" };
+    } catch (e) {
+      const message = String(e);
+      console.warn("[eir] update check failed:", message);
+      updateStatus = { kind: "error", message };
+    }
+  }
+
+  async function installPendingUpdate() {
+    if (!pendingUpdate) return;
+    if (updateStatus.kind === "downloading") return;
+    const ok = await withPinnedWindow(() =>
+      ask(
+        `Install eir v${pendingUpdate!.version}?\n\nThe app will relaunch after the update is installed.`,
+        { title: "Update available", kind: "info", okLabel: "Install" },
+      ),
+    );
+    if (!ok) return;
+    const update = pendingUpdate;
+    updateStatus = { kind: "downloading" };
+    try {
       await update.downloadAndInstall();
       updateStatus = { kind: "installed" };
       await relaunch();
     } catch (e) {
       const message = String(e);
-      console.warn("[eir] update check failed:", message);
+      console.warn("[eir] update install failed:", message);
       updateStatus = { kind: "error", message };
     }
   }
@@ -845,7 +899,10 @@
             class="secondary"
             disabled={updateStatus.kind === "checking" ||
               updateStatus.kind === "downloading"}
-            onclick={() => runUpdateCheck({ interactive: true })}
+            onclick={() =>
+              updateStatus.kind === "available"
+                ? installPendingUpdate()
+                : runUpdateCheck({ interactive: true })}
           >
             {#if updateStatus.kind === "checking"}
               Checking…
