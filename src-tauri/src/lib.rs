@@ -1,19 +1,14 @@
 mod auth;
 mod github;
+mod shortcut;
 mod tray;
 
 use std::sync::Mutex;
 
 use tauri::{Manager, WindowEvent};
-use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use crate::auth::AppState;
-
-/// Default hotkey to toggle the popup. Ctrl+Shift+E is uncommon on macOS
-/// so it rarely clashes with app shortcuts. Plan to make this configurable.
-fn toggle_shortcut() -> Shortcut {
-    Shortcut::new(Some(Modifiers::CONTROL | Modifiers::SHIFT), Code::KeyE)
-}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -28,7 +23,8 @@ pub fn run() {
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
-                    // Only one shortcut is registered; no need to compare.
+                    // Only one shortcut is registered at a time; no need to
+                    // compare (rebinding unregisters the previous one).
                     if event.state() == ShortcutState::Pressed {
                         tray::toggle_popup(app);
                     }
@@ -45,12 +41,17 @@ pub fn run() {
             github::fetch_notifications,
             github::mark_notification_read,
             tray::set_tray_badge,
+            shortcut::get_toggle_shortcut,
+            shortcut::set_toggle_shortcut,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             tray::setup(app)?;
-            app.global_shortcut().register(toggle_shortcut())?;
+            let stored = shortcut::load_shortcut_string();
+            let parsed = shortcut::parse_shortcut(&stored)
+                .or_else(|_| shortcut::parse_shortcut(shortcut::DEFAULT_SHORTCUT))?;
+            app.global_shortcut().register(parsed)?;
             Ok(())
         })
         .on_window_event(|window, event| {

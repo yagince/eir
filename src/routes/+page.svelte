@@ -58,6 +58,9 @@
   let refreshMs = $state<number>(loadIntervalFromStorage());
   let notifyEnabled = $state<boolean>(loadNotifyFromStorage());
   let notifications = $state<NotificationItem[]>([]);
+  let toggleShortcut = $state<string>("Ctrl+Shift+E");
+  let capturingShortcut = $state(false);
+  let shortcutError = $state<string | null>(null);
   const excludedRepos = new SvelteSet<string>(loadExcludedRepos());
   const hiddenItems = new SvelteSet<number>(loadHiddenItems());
   let newExcludedRepo = $state("");
@@ -297,10 +300,76 @@
     } catch {
       // ignore
     }
+    try {
+      toggleShortcut = await invoke<string>("get_toggle_shortcut");
+    } catch {
+      // keep default
+    }
+    window.addEventListener("keydown", handleGlobalKey);
     void loadItems({ silent: true });
   });
 
-  onDestroy(stopRefresh);
+  onDestroy(() => {
+    stopRefresh();
+    window.removeEventListener("keydown", handleGlobalKey);
+  });
+
+  function formatShortcut(e: KeyboardEvent): string | null {
+    if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) return null;
+    const parts: string[] = [];
+    if (e.metaKey) parts.push("Cmd");
+    if (e.ctrlKey) parts.push("Ctrl");
+    if (e.altKey) parts.push("Alt");
+    if (e.shiftKey) parts.push("Shift");
+    // Accept single-character keys (letters/digits/symbols) and F-keys.
+    let key: string;
+    if (e.key.length === 1) {
+      key = e.key.toUpperCase();
+    } else if (/^F\d+$/.test(e.key)) {
+      key = e.key.toUpperCase();
+    } else {
+      return null;
+    }
+    if (parts.length === 0) return null; // require at least one modifier
+    parts.push(key);
+    return parts.join("+");
+  }
+
+  async function handleGlobalKey(e: KeyboardEvent) {
+    if (capturingShortcut) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        capturingShortcut = false;
+        return;
+      }
+      const combo = formatShortcut(e);
+      if (!combo) return;
+      try {
+        await invoke("set_toggle_shortcut", { shortcut: combo });
+        toggleShortcut = combo;
+        shortcutError = null;
+      } catch (err) {
+        shortcutError = String(err);
+      } finally {
+        capturingShortcut = false;
+      }
+      return;
+    }
+
+    if (e.key === "Backspace" && showingSettings) {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      e.preventDefault();
+      showingSettings = false;
+    }
+  }
+
+  function startCaptureShortcut() {
+    shortcutError = null;
+    capturingShortcut = true;
+  }
 
   async function signIn() {
     error = null;
@@ -460,6 +529,23 @@
           <span class="setting-label">Test notification</span>
           <button class="secondary" onclick={sendTestNotification}>Send</button>
         </div>
+        <div class="setting-row">
+          <span class="setting-label">Toggle popup shortcut</span>
+          <button
+            class="shortcut-capture"
+            class:capturing={capturingShortcut}
+            onclick={startCaptureShortcut}
+          >
+            {#if capturingShortcut}
+              Press keys…
+            {:else}
+              {toggleShortcut}
+            {/if}
+          </button>
+        </div>
+        {#if shortcutError}
+          <p class="error">{shortcutError}</p>
+        {/if}
 
         <div class="setting-section">
           <span class="setting-label">Excluded repositories</span>
@@ -500,7 +586,7 @@
         </div>
 
         <p class="setting-hint">
-          Toggle popup: <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd>
+          Press <kbd>Backspace</kbd> to go back.
         </p>
       </div>
     </section>
@@ -785,6 +871,23 @@
     border: 1px solid rgba(0, 0, 0, 0.15);
     border-radius: 3px;
     background: rgba(0, 0, 0, 0.04);
+  }
+
+  .shortcut-capture {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 12px;
+    padding: 4px 10px;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    border-radius: 5px;
+    background: rgba(0, 0, 0, 0.04);
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .shortcut-capture.capturing {
+    background: rgba(9, 105, 218, 0.15);
+    border-color: #0969da;
+    color: #0969da;
   }
 
   .setting-section {
@@ -1346,6 +1449,15 @@
     .excluded-add input {
       background: rgba(255, 255, 255, 0.05);
       border-color: rgba(255, 255, 255, 0.15);
+    }
+    .shortcut-capture {
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.15);
+    }
+    .shortcut-capture.capturing {
+      background: rgba(88, 166, 255, 0.18);
+      border-color: #58a6ff;
+      color: #58a6ff;
     }
   }
 </style>
