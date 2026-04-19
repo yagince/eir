@@ -8,8 +8,6 @@ use tauri::{Manager, State};
 const CLIENT_ID: &str = "Ov23liRcswHdPlreAwk0";
 const SCOPE: &str = "repo read:user";
 const DEVICE_FLOW_TIMEOUT: Duration = Duration::from_secs(900);
-const KEYRING_SERVICE: &str = "dev.yagince.eir";
-const KEYRING_ACCOUNT: &str = "github-token";
 
 static HTTP: OnceLock<reqwest::Client> = OnceLock::new();
 
@@ -17,12 +15,59 @@ fn http() -> &'static reqwest::Client {
     HTTP.get_or_init(reqwest::Client::new)
 }
 
-fn keyring_entry() -> keyring::Result<keyring::Entry> {
-    keyring::Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)
+/// Plain file under `$HOME/.config/eir/token` with mode 0600.
+///
+/// We deliberately don't use the OS keychain. macOS Keychain ACLs bind to the
+/// caller's cdhash, which changes on every rebuild / new release — so
+/// "Always Allow" re-prompts the user on every update unless the app is
+/// signed with a stable Apple Developer ID *and* the ACL is set up with a
+/// Designated Requirement (which the `keyring` crate does not do). A
+/// mode-0600 file behaves consistently across dev and release builds, and
+/// matches what tools like `gh`, `git-credential-store`, and the `cargo`
+/// registry credentials file do.
+mod token_store {
+    use std::io::Write;
+    use std::path::PathBuf;
+
+    fn path() -> Option<PathBuf> {
+        let home = std::env::var_os("HOME")?;
+        Some(PathBuf::from(home).join(".config/eir/token"))
+    }
+
+    pub fn load() -> Option<String> {
+        let raw = std::fs::read_to_string(path()?).ok()?;
+        let trimmed = raw.trim().to_string();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed)
+        }
+    }
+
+    pub fn save(token: &str) {
+        let Some(p) = path() else { return };
+        if let Some(parent) = p.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(mut file) = std::fs::File::create(&p) {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+            }
+            let _ = file.write_all(token.as_bytes());
+        }
+    }
+
+    pub fn delete() {
+        if let Some(p) = path() {
+            let _ = std::fs::remove_file(p);
+        }
+    }
 }
 
 fn load_stored_token() -> Option<String> {
-    keyring_entry().ok()?.get_password().ok()
+    token_store::load()
 }
 
 #[derive(Default)]
@@ -116,9 +161,7 @@ pub async fn poll_device_flow(
 
         match res {
             TokenResponse::Success { access_token } => {
-                if let Ok(entry) = keyring_entry() {
-                    let _ = entry.set_password(&access_token);
-                }
+                token_store::save(&access_token);
                 auth.lock().unwrap().token = Some(access_token);
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
@@ -140,9 +183,7 @@ pub async fn poll_device_flow(
 
 pub fn clear_stored_token(auth: &Mutex<AppState>) {
     auth.lock().unwrap().token = None;
-    if let Ok(entry) = keyring_entry() {
-        let _ = entry.delete_credential();
-    }
+    token_store::delete();
 }
 
 #[tauri::command]

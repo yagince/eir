@@ -7,7 +7,7 @@ Named after Eir, the Norse goddess of healing. The icon combines a watching eye 
 ## Features
 
 - **Menubar only** — no dock icon; the app lives as a tray icon with a 380×520 popup
-- **GitHub OAuth device flow** — sign in once, the token is stored in the OS keychain (Apple Keychain / Windows Credential Manager / libsecret) and survives restarts
+- **GitHub OAuth device flow** — sign in once, the token is stored in a mode-0600 file at `~/.config/eir/token` and survives restarts
 - **Grouped list** — PRs and Issues grouped by repository with sticky headers and per-repo unread counts
 - **Filter tabs** — All / Mine / Review Requests / Mentions, backed by different GitHub search queries
 - **Auto-refresh** — silent background polling every 30s–5min (configurable)
