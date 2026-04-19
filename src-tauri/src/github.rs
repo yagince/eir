@@ -19,8 +19,20 @@ pub struct WatchedItem {
     state: &'static str,
 }
 
+fn query_for_tab(tab: &str) -> &'static str {
+    match tab {
+        "authored" => "is:open is:pr author:@me archived:false",
+        "review" => "is:open is:pr review-requested:@me archived:false",
+        "mentions" => "is:open mentions:@me archived:false",
+        _ => "is:open involves:@me archived:false",
+    }
+}
+
 #[tauri::command]
-pub async fn fetch_watched(auth: State<'_, Mutex<AppState>>) -> Result<Vec<WatchedItem>, String> {
+pub async fn fetch_watched(
+    tab: String,
+    auth: State<'_, Mutex<AppState>>,
+) -> Result<Vec<WatchedItem>, String> {
     let token = auth
         .lock()
         .unwrap()
@@ -35,7 +47,7 @@ pub async fn fetch_watched(auth: State<'_, Mutex<AppState>>) -> Result<Vec<Watch
 
     let page = octo
         .search()
-        .issues_and_pull_requests("is:open involves:@me archived:false")
+        .issues_and_pull_requests(query_for_tab(&tab))
         .sort("updated")
         .order("desc")
         .per_page(50)

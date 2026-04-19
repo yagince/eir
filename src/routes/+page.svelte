@@ -30,9 +30,17 @@
   };
 
   type Phase = "idle" | "pending" | "loaded";
+  type Tab = "all" | "authored" | "review" | "mentions";
 
   const REFRESH_MS = 60_000;
   const SEEN_KEY = "eir.seen";
+  const TAB_KEY = "eir.tab";
+  const TABS: { id: Tab; label: string }[] = [
+    { id: "all", label: "All" },
+    { id: "authored", label: "Mine" },
+    { id: "review", label: "Review" },
+    { id: "mentions", label: "Mentions" },
+  ];
 
   let phase = $state<Phase>("idle");
   let deviceCode = $state<DeviceCode | null>(null);
@@ -40,11 +48,18 @@
   let loading = $state(false);
   let error = $state<string | null>(null);
   let copied = $state(false);
+  let activeTab = $state<Tab>(loadTabFromStorage());
 
   const seen = new SvelteSet<number>(loadSeenFromStorage());
   let prevIds = new Set<number>();
   let hasLoadedOnce = false;
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
+
+  function loadTabFromStorage(): Tab {
+    const raw = localStorage.getItem(TAB_KEY);
+    if (raw === "authored" || raw === "review" || raw === "mentions") return raw;
+    return "all";
+  }
 
   function loadSeenFromStorage(): number[] {
     try {
@@ -84,7 +99,9 @@
       error = null;
     }
     try {
-      const fetched = await invoke<WatchedItem[]>("fetch_watched");
+      const fetched = await invoke<WatchedItem[]>("fetch_watched", {
+        tab: activeTab,
+      });
       const nextIds = new Set(fetched.map((i) => i.id));
 
       if (!hasLoadedOnce) {
@@ -191,6 +208,16 @@
     void openUrl(item.url);
   }
 
+  async function switchTab(tab: Tab) {
+    if (tab === activeTab) return;
+    activeTab = tab;
+    localStorage.setItem(TAB_KEY, tab);
+    hasLoadedOnce = false;
+    prevIds = new Set();
+    items = [];
+    await loadItems();
+  }
+
   type RepoGroup = {
     repo: string;
     items: WatchedItem[];
@@ -264,9 +291,20 @@
       <p class="waiting">Waiting for authorization…</p>
     </section>
   {:else}
+    <nav class="tabs">
+      {#each TABS as tab (tab.id)}
+        <button
+          class="tab"
+          class:active={activeTab === tab.id}
+          onclick={() => switchTab(tab.id)}
+        >
+          {tab.label}
+        </button>
+      {/each}
+    </nav>
     {#if items.length === 0 && !loading}
       <section class="empty">
-        <p>No open PRs or Issues involving you.</p>
+        <p>Nothing here.</p>
       </section>
     {:else}
       <ul class="list">
@@ -450,6 +488,35 @@
     color: #d1242f;
   }
 
+  .tabs {
+    display: flex;
+    gap: 4px;
+    padding: 0 0 8px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+    margin-bottom: 8px;
+  }
+
+  .tab {
+    flex: 1;
+    padding: 4px 8px;
+    font-size: 11px;
+    font-weight: 500;
+    border: none;
+    border-radius: 5px;
+    background: none;
+    color: rgba(27, 27, 31, 0.6);
+    cursor: pointer;
+  }
+
+  .tab:hover {
+    background: rgba(0, 0, 0, 0.05);
+  }
+
+  .tab.active {
+    background: rgba(9, 105, 218, 0.12);
+    color: #0969da;
+  }
+
   .list {
     flex: 1;
     overflow-y: auto;
@@ -602,8 +669,19 @@
       background: rgba(30, 30, 32, 0.98);
     }
     header,
-    footer {
+    footer,
+    .tabs {
       border-color: rgba(255, 255, 255, 0.08);
+    }
+    .tab {
+      color: rgba(236, 236, 239, 0.6);
+    }
+    .tab:hover {
+      background: rgba(255, 255, 255, 0.06);
+    }
+    .tab.active {
+      background: rgba(9, 105, 218, 0.2);
+      color: #58a6ff;
     }
     .subtitle,
     .meta,
