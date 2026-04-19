@@ -7,11 +7,17 @@
     sendNotification,
   } from "@tauri-apps/plugin-notification";
   import { onDestroy, onMount } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
 
   type Reviewer = {
     login: string;
     avatar_url: string;
-    state: "approved" | "changes_requested" | "pending";
+    state:
+      | "approved"
+      | "changes_requested"
+      | "commented"
+      | "dismissed"
+      | "pending";
   };
 
   type CiStatus = "success" | "pending" | "failure" | "error" | "unknown";
@@ -52,17 +58,20 @@
   };
 
   type Phase = "idle" | "pending" | "loaded";
-  type Tab = "all" | "authored" | "review" | "mentions";
+  type Tab = "all" | "authored" | "review" | "mentions" | "hidden";
 
   const DEFAULT_REFRESH_MS = 60_000;
   const TAB_KEY = "eir.tab";
   const INTERVAL_KEY = "eir.refreshMs";
   const NOTIFY_KEY = "eir.notifyEnabled";
+  const EXCLUDED_REPOS_KEY = "eir.excludedRepos";
+  const HIDDEN_ITEMS_KEY = "eir.hiddenItems";
   const TABS: { id: Tab; label: string }[] = [
     { id: "all", label: "All" },
     { id: "authored", label: "Mine" },
     { id: "review", label: "Review" },
     { id: "mentions", label: "Mentions" },
+    { id: "hidden", label: "Hidden" },
   ];
   const REFRESH_OPTIONS: { value: number; label: string }[] = [
     { value: 30_000, label: "30 seconds" },
@@ -82,6 +91,9 @@
   let refreshMs = $state<number>(loadIntervalFromStorage());
   let notifyEnabled = $state<boolean>(loadNotifyFromStorage());
   let notifications = $state<NotificationItem[]>([]);
+  const excludedRepos = new SvelteSet<string>(loadExcludedRepos());
+  const hiddenItems = new SvelteSet<number>(loadHiddenItems());
+  let newExcludedRepo = $state("");
 
   let prevThreads = new Map<number, string>();
   let hasLoadedOnce = false;
@@ -89,8 +101,44 @@
 
   function loadTabFromStorage(): Tab {
     const raw = localStorage.getItem(TAB_KEY);
-    if (raw === "authored" || raw === "review" || raw === "mentions") return raw;
+    if (
+      raw === "authored" ||
+      raw === "review" ||
+      raw === "mentions" ||
+      raw === "hidden"
+    ) {
+      return raw;
+    }
     return "all";
+  }
+
+  function loadExcludedRepos(): string[] {
+    try {
+      const raw = localStorage.getItem(EXCLUDED_REPOS_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function persistExcludedRepos() {
+    localStorage.setItem(
+      EXCLUDED_REPOS_KEY,
+      JSON.stringify([...excludedRepos]),
+    );
+  }
+
+  function loadHiddenItems(): number[] {
+    try {
+      const raw = localStorage.getItem(HIDDEN_ITEMS_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function persistHiddenItems() {
+    localStorage.setItem(HIDDEN_ITEMS_KEY, JSON.stringify([...hiddenItems]));
   }
 
   function loadIntervalFromStorage(): number {
@@ -120,14 +168,11 @@
   });
 
   function updateBadge() {
-    const count = items.length;
-    const matched = items.filter((i) => notificationsByKey.has(itemKey(i)));
-    const hasUnread = matched.length > 0;
-    console.info(
-      `[eir] tray badge → count=${count} hasUnread=${hasUnread} matched=${matched
-        .map((i) => `${i.repo}#${i.number}`)
-        .join(",")} notifKeys=${[...notificationsByKey.keys()].join(",")}`,
+    const count = visibleItems.length;
+    const hasUnread = visibleItems.some((i) =>
+      notificationsByKey.has(itemKey(i)),
     );
+    console.info(`[eir] tray badge → count=${count} hasUnread=${hasUnread}`);
     void invoke("set_tray_badge", { count, hasUnread });
   }
 
@@ -157,8 +202,11 @@
       error = null;
     }
     try {
+      // The "hidden" tab is purely a client-side filter; use the broadest
+      // server query so it can surface anything the user has hidden.
+      const serverTab = activeTab === "hidden" ? "all" : activeTab;
       const [fetchedItems, fetchedNotifs] = await Promise.all([
-        invoke<WatchedItem[]>("fetch_watched", { tab: activeTab }),
+        invoke<WatchedItem[]>("fetch_watched", { tab: serverTab }),
         invoke<NotificationItem[]>("fetch_notifications"),
       ]);
 
@@ -365,6 +413,33 @@
     localStorage.setItem(NOTIFY_KEY, enabled ? "1" : "0");
   }
 
+  function hideItem(id: number) {
+    hiddenItems.add(id);
+    persistHiddenItems();
+    updateBadge();
+  }
+
+  function unhideItem(id: number) {
+    hiddenItems.delete(id);
+    persistHiddenItems();
+    updateBadge();
+  }
+
+  function addExcludedRepo() {
+    const name = newExcludedRepo.trim();
+    if (!name || !name.includes("/")) return;
+    excludedRepos.add(name);
+    persistExcludedRepos();
+    newExcludedRepo = "";
+    updateBadge();
+  }
+
+  function removeExcludedRepo(repo: string) {
+    excludedRepos.delete(repo);
+    persistExcludedRepos();
+    updateBadge();
+  }
+
   async function switchTab(tab: Tab) {
     if (tab === activeTab) return;
     activeTab = tab;
@@ -380,9 +455,18 @@
     unreadCount: number;
   };
 
+  const visibleItems = $derived.by<WatchedItem[]>(() => {
+    if (activeTab === "hidden") {
+      return items.filter((i) => hiddenItems.has(i.id));
+    }
+    return items.filter(
+      (i) => !hiddenItems.has(i.id) && !excludedRepos.has(i.repo),
+    );
+  });
+
   const groups = $derived.by<RepoGroup[]>(() => {
     const byRepo = new Map<string, WatchedItem[]>();
-    for (const item of items) {
+    for (const item of visibleItems) {
       const bucket = byRepo.get(item.repo);
       if (bucket) {
         bucket.push(item);
@@ -454,6 +538,39 @@
           <span class="setting-label">Test notification</span>
           <button class="secondary" onclick={sendTestNotification}>Send</button>
         </div>
+
+        <div class="setting-section">
+          <span class="setting-label">Excluded repositories</span>
+          {#if excludedRepos.size === 0}
+            <p class="setting-hint">None. Items from all repos are shown.</p>
+          {:else}
+            <ul class="excluded-list">
+              {#each [...excludedRepos].sort() as repo (repo)}
+                <li>
+                  <span class="excluded-repo">{repo}</span>
+                  <button
+                    class="row-action"
+                    onclick={() => removeExcludedRepo(repo)}
+                    aria-label="Remove"
+                    title="Remove"
+                  >
+                    ×
+                  </button>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+          <div class="excluded-add">
+            <input
+              type="text"
+              placeholder="owner/repo"
+              bind:value={newExcludedRepo}
+              onkeydown={(e) => e.key === "Enter" && addExcludedRepo()}
+            />
+            <button class="secondary" onclick={addExcludedRepo}>Add</button>
+          </div>
+        </div>
+
         <p class="setting-hint">
           Toggle popup: <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd>
         </p>
@@ -494,7 +611,7 @@
         </button>
       {/each}
     </nav>
-    {#if items.length === 0 && !loading}
+    {#if visibleItems.length === 0 && !loading}
       <section class="empty">
         <p>Nothing here.</p>
       </section>
@@ -510,7 +627,7 @@
             </div>
             <ul class="group-items">
               {#each group.items as item (item.id)}
-                <li>
+                <li class="item-row">
                   <button
                     class="item"
                     class:unread={notificationsByKey.has(itemKey(item))}
@@ -565,6 +682,10 @@
                                   approved
                                 {:else if r.state === "changes_requested"}
                                   changes
+                                {:else if r.state === "commented"}
+                                  commented
+                                {:else if r.state === "dismissed"}
+                                  dismissed
                                 {:else}
                                   not yet
                                 {/if}
@@ -575,6 +696,25 @@
                       {/if}
                     </span>
                   </button>
+                  {#if activeTab === "hidden"}
+                    <button
+                      class="row-action"
+                      onclick={() => unhideItem(item.id)}
+                      title="Unhide"
+                      aria-label="Unhide"
+                    >
+                      ↩
+                    </button>
+                  {:else}
+                    <button
+                      class="row-action"
+                      onclick={() => hideItem(item.id)}
+                      title="Hide"
+                      aria-label="Hide"
+                    >
+                      ×
+                    </button>
+                  {/if}
                 </li>
               {/each}
             </ul>
@@ -723,6 +863,63 @@
     border: 1px solid rgba(0, 0, 0, 0.15);
     border-radius: 3px;
     background: rgba(0, 0, 0, 0.04);
+  }
+
+  .setting-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 8px;
+    border-top: 1px solid rgba(0, 0, 0, 0.06);
+  }
+
+  .excluded-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .excluded-list li {
+    display: flex;
+    align-items: center;
+    padding: 4px 6px;
+    font-size: 12px;
+    border-radius: 5px;
+    background: rgba(0, 0, 0, 0.04);
+  }
+
+  .excluded-list .row-action {
+    opacity: 0.6;
+  }
+
+  .excluded-list li:hover .row-action {
+    opacity: 1;
+  }
+
+  .excluded-repo {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .excluded-add {
+    display: flex;
+    gap: 6px;
+  }
+
+  .excluded-add input {
+    flex: 1;
+    padding: 4px 6px;
+    font-size: 12px;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    border-radius: 5px;
+    background: white;
+    color: inherit;
+    min-width: 0;
   }
 
   .icon-btn {
@@ -904,8 +1101,15 @@
     gap: 2px;
   }
 
+  .item-row {
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+  }
+
   .item {
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     display: flex;
     align-items: flex-start;
     gap: 8px;
@@ -916,6 +1120,24 @@
     text-align: left;
     cursor: pointer;
     color: inherit;
+  }
+
+  .row-action {
+    flex-shrink: 0;
+    width: 24px;
+    padding: 0;
+    background: none;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    color: rgba(27, 27, 31, 0.25);
+    cursor: pointer;
+    transition: color 100ms, background 100ms;
+  }
+
+  .row-action:hover {
+    color: #d1242f;
+    background: rgba(0, 0, 0, 0.05);
   }
 
   .item:hover {
@@ -1086,6 +1308,20 @@
     color: #9a6700;
   }
 
+  .reviewer-commented {
+    background: rgba(87, 96, 106, 0.15);
+    color: #57606a;
+  }
+
+  .reviewer-dismissed {
+    background: rgba(87, 96, 106, 0.1);
+    color: rgba(87, 96, 106, 0.7);
+  }
+
+  .reviewer-dismissed .reviewer-chip-name {
+    text-decoration: line-through;
+  }
+
   footer {
     margin-top: 8px;
     padding-top: 8px;
@@ -1169,6 +1405,30 @@
     .reviewer-pending {
       background: rgba(187, 128, 9, 0.2);
       color: #d29922;
+    }
+    .reviewer-commented {
+      background: rgba(139, 148, 158, 0.2);
+      color: #8b949e;
+    }
+    .reviewer-dismissed {
+      background: rgba(139, 148, 158, 0.12);
+      color: rgba(139, 148, 158, 0.7);
+    }
+    .row-action {
+      color: rgba(236, 236, 239, 0.4);
+    }
+    .row-action:hover {
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .setting-section {
+      border-top-color: rgba(255, 255, 255, 0.06);
+    }
+    .excluded-list li {
+      background: rgba(255, 255, 255, 0.05);
+    }
+    .excluded-add input {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: rgba(255, 255, 255, 0.15);
     }
   }
 </style>

@@ -282,46 +282,57 @@ fn pr_to_item(pr: PrNode) -> WatchedItem {
         .and_then(|a| a.avatar_url.clone())
         .unwrap_or_default();
 
-    // Latest non-commented review state per user, in iteration order.
+    // Latest substantive review state per user. "Commented" is preserved
+    // only if there's no stronger signal (approved / changes_requested /
+    // dismissed) yet. A reviewer who approved then left a plain comment
+    // still reads as "approved", matching GitHub's own review UI.
     let mut latest: std::collections::HashMap<String, (String, &'static str)> =
         std::collections::HashMap::new();
     for r in pr.reviews.nodes.into_iter().flatten() {
         let Some(user) = r.author else { continue };
-        let state = match r.state.as_str() {
-            "APPROVED" => "approved",
-            "CHANGES_REQUESTED" => "changes_requested",
-            "DISMISSED" => "dismissed",
-            _ => continue, // COMMENTED, PENDING
-        };
-        latest.insert(user.login, (user.avatar_url.unwrap_or_default(), state));
-    }
-
-    let mut reviewers: Vec<Reviewer> = latest
-        .into_iter()
-        .filter_map(|(login, (avatar_url, state))| {
-            if state == "dismissed" {
-                return None;
+        let avatar = user.avatar_url.unwrap_or_default();
+        match r.state.as_str() {
+            "APPROVED" => {
+                latest.insert(user.login, (avatar, "approved"));
             }
-            Some(Reviewer {
-                login,
-                avatar_url,
-                state,
-            })
-        })
-        .collect();
-
-    for rr in pr.review_requests.nodes.into_iter().flatten() {
-        if let Some(RequestedReviewer::User(u)) = rr.requested_reviewer {
-            if reviewers.iter().any(|r| r.login == u.login) {
-                continue;
+            "CHANGES_REQUESTED" => {
+                latest.insert(user.login, (avatar, "changes_requested"));
             }
-            reviewers.push(Reviewer {
-                login: u.login,
-                avatar_url: u.avatar_url.unwrap_or_default(),
-                state: "pending",
-            });
+            "DISMISSED" => {
+                latest.insert(user.login, (avatar, "dismissed"));
+            }
+            "COMMENTED" => {
+                latest.entry(user.login).or_insert((avatar, "commented"));
+            }
+            _ => {} // PENDING and anything else
         }
     }
+
+    // If a reviewer is in review_requests it means GitHub is currently
+    // asking them to review (either they've never reviewed, or their
+    // previous review was dismissed and a fresh one is expected). That
+    // "pending" stance overrides a stale "dismissed" — otherwise we'd
+    // show someone as dismissed when they're really waiting to review.
+    for rr in pr.review_requests.nodes.into_iter().flatten() {
+        if let Some(RequestedReviewer::User(u)) = rr.requested_reviewer {
+            let avatar = u.avatar_url.unwrap_or_default();
+            match latest.get(&u.login).map(|(_, s)| *s) {
+                None | Some("dismissed") => {
+                    latest.insert(u.login, (avatar, "pending"));
+                }
+                _ => {} // already has a substantive stance — keep it
+            }
+        }
+    }
+
+    let reviewers: Vec<Reviewer> = latest
+        .into_iter()
+        .map(|(login, (avatar_url, state))| Reviewer {
+            login,
+            avatar_url,
+            state,
+        })
+        .collect();
 
     let ci_status = pr
         .commits
