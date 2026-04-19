@@ -1,7 +1,13 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { onMount } from "svelte";
+  import {
+    isPermissionGranted,
+    requestPermission,
+    sendNotification,
+  } from "@tauri-apps/plugin-notification";
+  import { onDestroy, onMount } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
 
   type WatchedItem = {
     id: number;
@@ -25,6 +31,9 @@
 
   type Phase = "idle" | "pending" | "loaded";
 
+  const REFRESH_MS = 60_000;
+  const SEEN_KEY = "eir.seen";
+
   let phase = $state<Phase>("idle");
   let deviceCode = $state<DeviceCode | null>(null);
   let items = $state<WatchedItem[]>([]);
@@ -32,14 +41,96 @@
   let error = $state<string | null>(null);
   let copied = $state(false);
 
-  onMount(async () => {
+  const seen = new SvelteSet<number>(loadSeenFromStorage());
+  let prevIds = new Set<number>();
+  let hasLoadedOnce = false;
+  let refreshTimer: ReturnType<typeof setInterval> | null = null;
+
+  function loadSeenFromStorage(): number[] {
     try {
-      items = await invoke<WatchedItem[]>("fetch_watched");
-      phase = "loaded";
+      const raw = localStorage.getItem(SEEN_KEY);
+      return raw ? JSON.parse(raw) : [];
     } catch {
-      // stay on idle when not authenticated or fetch fails
+      return [];
     }
+  }
+
+  function persistSeen() {
+    localStorage.setItem(SEEN_KEY, JSON.stringify([...seen]));
+  }
+
+  function updateBadge() {
+    const count = items.filter((i) => !seen.has(i.id)).length;
+    void invoke("set_tray_badge", { count });
+  }
+
+  function startRefresh() {
+    if (refreshTimer) return;
+    refreshTimer = setInterval(() => {
+      void loadItems({ silent: true });
+    }, REFRESH_MS);
+  }
+
+  function stopRefresh() {
+    if (refreshTimer) {
+      clearInterval(refreshTimer);
+      refreshTimer = null;
+    }
+  }
+
+  async function loadItems({ silent = false }: { silent?: boolean } = {}) {
+    if (!silent) {
+      loading = true;
+      error = null;
+    }
+    try {
+      const fetched = await invoke<WatchedItem[]>("fetch_watched");
+      const nextIds = new Set(fetched.map((i) => i.id));
+
+      if (!hasLoadedOnce) {
+        for (const id of nextIds) seen.add(id);
+        persistSeen();
+        hasLoadedOnce = true;
+      } else {
+        const appeared = fetched.filter((i) => !prevIds.has(i.id));
+        if (appeared.length > 0) {
+          await notify(appeared);
+        }
+      }
+
+      items = fetched;
+      prevIds = nextIds;
+      phase = "loaded";
+      updateBadge();
+      startRefresh();
+    } catch (e) {
+      if (!silent) error = String(e);
+    } finally {
+      if (!silent) loading = false;
+    }
+  }
+
+  async function notify(newItems: WatchedItem[]) {
+    if (!(await ensureNotificationPermission())) return;
+    for (const item of newItems) {
+      const kind = item.kind === "pr" ? "PR" : "Issue";
+      sendNotification({
+        title: `New ${kind}`,
+        body: `${item.repo}#${item.number} — ${item.title}`,
+      });
+    }
+  }
+
+  async function ensureNotificationPermission(): Promise<boolean> {
+    if (await isPermissionGranted()) return true;
+    return (await requestPermission()) === "granted";
+  }
+
+  onMount(() => {
+    void loadItems({ silent: true });
   });
+
+  onDestroy(stopRefresh);
 
   async function signIn() {
     error = null;
@@ -62,6 +153,7 @@
       });
       deviceCode = null;
       copied = false;
+      hasLoadedOnce = false;
       await loadItems();
     } catch (e) {
       error = String(e);
@@ -71,22 +163,13 @@
     }
   }
 
-  async function loadItems() {
-    loading = true;
-    error = null;
-    try {
-      items = await invoke<WatchedItem[]>("fetch_watched");
-      phase = "loaded";
-    } catch (e) {
-      error = String(e);
-    } finally {
-      loading = false;
-    }
-  }
-
   async function signOut() {
+    stopRefresh();
     await invoke("sign_out");
+    void invoke("set_tray_badge", { count: 0 });
     items = [];
+    prevIds = new Set();
+    hasLoadedOnce = false;
     phase = "idle";
   }
 
@@ -99,6 +182,13 @@
     } catch (e) {
       error = `copy failed: ${e}`;
     }
+  }
+
+  function openItem(item: WatchedItem) {
+    seen.add(item.id);
+    persistSeen();
+    updateBadge();
+    void openUrl(item.url);
   }
 
   function relativeTime(iso: string): string {
@@ -151,7 +241,11 @@
       <ul class="list">
         {#each items as item (item.id)}
           <li>
-            <button class="item" onclick={() => openUrl(item.url)}>
+            <button
+              class="item"
+              class:unread={!seen.has(item.id)}
+              onclick={() => openItem(item)}
+            >
               <span class="badge" class:pr={item.kind === "pr"}>
                 {item.kind === "pr" ? "PR" : "IS"}
               </span>
@@ -172,7 +266,7 @@
       <p class="error">{error}</p>
     {/if}
     <footer>
-      <button class="refresh" onclick={loadItems} disabled={loading}>
+      <button class="refresh" onclick={() => loadItems()} disabled={loading}>
         {loading ? "Refreshing…" : "Refresh"}
       </button>
       <button class="signout" onclick={signOut}>Sign out</button>
@@ -340,6 +434,26 @@
 
   .item:hover {
     background: rgba(0, 0, 0, 0.05);
+  }
+
+  .item.unread .title {
+    font-weight: 600;
+  }
+
+  .item.unread::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #0969da;
+    margin-top: 6px;
+    flex-shrink: 0;
+  }
+
+  .item:not(.unread)::before {
+    content: "";
+    width: 6px;
+    flex-shrink: 0;
   }
 
   .badge {

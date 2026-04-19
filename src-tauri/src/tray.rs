@@ -6,13 +6,26 @@ use tauri::{
 };
 
 const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray-icon.png");
+const TRAY_ID: &str = "main";
+
+#[tauri::command]
+pub fn set_tray_badge(count: u32, app: tauri::AppHandle) {
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        let title = if count == 0 {
+            None
+        } else {
+            Some(format!(" {count}"))
+        };
+        let _ = tray.set_title(title);
+    }
+}
 
 pub fn setup(app: &App) -> tauri::Result<()> {
     let quit_item = MenuItem::with_id(app, "quit", "Quit eir", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&quit_item])?;
 
     let tray_icon = Image::from_bytes(TRAY_ICON_BYTES)?;
-    TrayIconBuilder::with_id("main")
+    TrayIconBuilder::with_id(TRAY_ID)
         .icon(tray_icon)
         .icon_as_template(true)
         .menu(&menu)

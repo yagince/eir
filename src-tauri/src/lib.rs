@@ -12,13 +12,15 @@ use crate::auth::AppState;
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .manage(Mutex::new(AppState::default()))
+        .plugin(tauri_plugin_notification::init())
+        .manage(Mutex::new(AppState::with_stored_token()))
         .invoke_handler(tauri::generate_handler![
             auth::start_device_flow,
             auth::poll_device_flow,
             auth::sign_out,
             auth::set_window_pinned,
             github::fetch_watched,
+            tray::set_tray_badge,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]

@@ -8,6 +8,8 @@ use tauri::{Manager, State};
 const CLIENT_ID: &str = "Ov23liRcswHdPlreAwk0";
 const SCOPE: &str = "repo read:user";
 const DEVICE_FLOW_TIMEOUT: Duration = Duration::from_secs(900);
+const KEYRING_SERVICE: &str = "dev.yagince.eir";
+const KEYRING_ACCOUNT: &str = "github-token";
 
 static HTTP: OnceLock<reqwest::Client> = OnceLock::new();
 
@@ -15,10 +17,27 @@ fn http() -> &'static reqwest::Client {
     HTTP.get_or_init(reqwest::Client::new)
 }
 
+fn keyring_entry() -> keyring::Result<keyring::Entry> {
+    keyring::Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)
+}
+
+fn load_stored_token() -> Option<String> {
+    keyring_entry().ok()?.get_password().ok()
+}
+
 #[derive(Default)]
 pub struct AppState {
     pub(crate) token: Option<String>,
     pub(crate) pinned: bool,
+}
+
+impl AppState {
+    pub fn with_stored_token() -> Self {
+        Self {
+            token: load_stored_token(),
+            pinned: false,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -97,6 +116,9 @@ pub async fn poll_device_flow(
 
         match res {
             TokenResponse::Success { access_token } => {
+                if let Ok(entry) = keyring_entry() {
+                    let _ = entry.set_password(&access_token);
+                }
                 auth.lock().unwrap().token = Some(access_token);
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
@@ -119,6 +141,9 @@ pub async fn poll_device_flow(
 #[tauri::command]
 pub fn sign_out(auth: State<'_, Mutex<AppState>>) {
     auth.lock().unwrap().token = None;
+    if let Ok(entry) = keyring_entry() {
+        let _ = entry.delete_credential();
+    }
 }
 
 #[tauri::command]
