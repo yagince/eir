@@ -34,8 +34,24 @@ jobs:
         run: pnpm test
 
   rust:
-    name: rust (fmt + clippy + test)
-    runs-on: macos-latest
+    # Compile on every supported platform so the cfg branches for Windows and
+    # Linux don't rot unnoticed. fmt/clippy/tests only run once (on macOS) to
+    # avoid paying for the same lint work on all three runners.
+    name: rust (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: macos
+            full_checks: true
+          - os: ubuntu-22.04
+            label: linux
+            full_checks: false
+          - os: windows-latest
+            label: windows
+            full_checks: false
     defaults:
       run:
         working-directory: src-tauri
@@ -49,12 +65,36 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          key: ${{ matrix.label }}
+
+      - name: Install Linux system deps
+        if: matrix.os == 'ubuntu-22.04'
+        working-directory: ${{ github.workspace }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
 
       - name: fmt
+        if: matrix.full_checks
         run: cargo fmt --all -- --check
 
       - name: clippy
+        if: matrix.full_checks
         run: cargo clippy --all-targets -- -D warnings
 
       - name: test
+        if: matrix.full_checks
         run: cargo test --lib
+
+      - name: check (platform compile)
+        if: ${{ !matrix.full_checks }}
+        run: cargo check

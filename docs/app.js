@@ -1,11 +1,30 @@
-// Fetch the latest release metadata and rewrite the CTA buttons to point at the
-// exact .dmg assets, so visitors get the binary in one click instead of landing
-// on the releases page and scanning for the right file. Falls back silently to
-// the generic /releases/latest link if the API is rate-limited or unreachable.
+// Fetch the latest release metadata and rewrite the CTA buttons to point at
+// the exact per-platform assets, so visitors get the binary in one click
+// instead of landing on the releases page and scanning for the right file.
+// Falls back silently to the generic /releases/latest link if the API is
+// rate-limited or unreachable.
 (async function updateDownloadLinks() {
   const versionEl = document.getElementById("version-line");
-  const arm64Btn = document.getElementById("download-arm64");
-  const intelBtn = document.getElementById("download-intel");
+
+  // Each entry: [button id, predicate matching the asset filename]. Order the
+  // checks from most specific to least so macOS arm64 isn't mis-matched as
+  // "generic mac" etc.
+  const matchers = [
+    ["download-arm64", (n) => /aarch64/i.test(n) && n.endsWith(".dmg")],
+    [
+      "download-intel",
+      (n) => /(x64|x86_64)/i.test(n) && n.endsWith(".dmg"),
+    ],
+    [
+      "download-windows",
+      (n) => /windows|\.msi$|setup\.exe$/i.test(n) && !n.endsWith(".sig"),
+    ],
+    [
+      "download-linux",
+      (n) =>
+        (/\.AppImage$/i.test(n) || /\.deb$/i.test(n)) && !n.endsWith(".sig"),
+    ],
+  ];
 
   try {
     const res = await fetch(
@@ -16,15 +35,12 @@
     const release = await res.json();
 
     const assets = release.assets || [];
-    const arm64 = assets.find(
-      (a) => /aarch64/i.test(a.name) && a.name.endsWith(".dmg"),
-    );
-    const intel = assets.find(
-      (a) => /x64|x86_64/i.test(a.name) && a.name.endsWith(".dmg"),
-    );
-
-    if (arm64) arm64Btn.href = arm64.browser_download_url;
-    if (intel) intelBtn.href = intel.browser_download_url;
+    for (const [id, predicate] of matchers) {
+      const btn = document.getElementById(id);
+      if (!btn) continue;
+      const asset = assets.find((a) => predicate(a.name));
+      if (asset) btn.href = asset.browser_download_url;
+    }
 
     versionEl.textContent = "Latest release: " + release.tag_name;
   } catch (err) {

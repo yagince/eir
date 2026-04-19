@@ -12,16 +12,24 @@ on:
 
 jobs:
   build:
-    name: build (${{ matrix.target }})
-    runs-on: macos-latest
+    name: build (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - target: aarch64-apple-darwin
-            arch: arm64
-          - target: x86_64-apple-darwin
-            arch: x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            label: macos-arm64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            label: macos-x64
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            label: linux-x64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: windows-x64
     steps:
       - uses: actions/checkout@v6
 
@@ -43,10 +51,32 @@ jobs:
           workspaces: src-tauri
           key: ${{ matrix.target }}
 
+      # Tauri on Linux pulls in WebKitGTK, AppIndicator, and librsvg through
+      # the system package manager. These aren't preinstalled on the GitHub
+      # runner image, so the build fails at the WebView link step without
+      # them. WebView2 on Windows and WKWebView on macOS are system-provided,
+      # so only Linux needs this step.
+      - name: Install Linux system deps
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
       - run: pnpm install --frozen-lockfile
 
       - name: Resolve tag
         id: tag
+        shell: bash
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "name=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
@@ -58,10 +88,11 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Signs the updater artefacts (.app.tar.gz + latest.json) with
-          # the ed25519 keypair whose public half lives in tauri.conf.json.
-          # Without this secret, tauri-action skips updater signing and
-          # the in-app "Check for updates" flow won't verify the download.
+          # Signs the updater artefacts (.app.tar.gz / .nsis.zip / .AppImage
+          # .tar.gz + latest.json) with the ed25519 keypair whose public half
+          # lives in tauri.conf.json. Without this secret, tauri-action skips
+          # updater signing and the in-app "Check for updates" flow won't
+          # verify the download.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Ad-hoc macOS codesign only; adding an Apple Developer ID later

@@ -15,23 +15,39 @@ fn http() -> &'static reqwest::Client {
     HTTP.get_or_init(reqwest::Client::new)
 }
 
-/// Plain file under `$HOME/.config/eir/token` with mode 0600.
+/// Plain file under a per-user config directory, mode 0600 on unix.
+///
+/// - macOS / Linux: `$HOME/.config/eir/token`
+/// - Windows: `%APPDATA%\eir\token`
 ///
 /// We deliberately don't use the OS keychain. macOS Keychain ACLs bind to the
 /// caller's cdhash, which changes on every rebuild / new release — so
 /// "Always Allow" re-prompts the user on every update unless the app is
 /// signed with a stable Apple Developer ID *and* the ACL is set up with a
 /// Designated Requirement (which the `keyring` crate does not do). A
-/// mode-0600 file behaves consistently across dev and release builds, and
-/// matches what tools like `gh`, `git-credential-store`, and the `cargo`
-/// registry credentials file do.
+/// plain mode-0600 file behaves consistently across dev and release builds,
+/// and matches what tools like `gh`, `git-credential-store`, and the `cargo`
+/// registry credentials file do. Windows stores the file under `%APPDATA%`
+/// where per-user ACLs already restrict access to the owning account.
 mod token_store {
     use std::io::Write;
     use std::path::PathBuf;
 
+    #[cfg(not(windows))]
     fn path() -> Option<PathBuf> {
         let home = std::env::var_os("HOME")?;
-        Some(PathBuf::from(home).join(".config/eir/token"))
+        Some(
+            PathBuf::from(home)
+                .join(".config")
+                .join("eir")
+                .join("token"),
+        )
+    }
+
+    #[cfg(windows)]
+    fn path() -> Option<PathBuf> {
+        let appdata = std::env::var_os("APPDATA")?;
+        Some(PathBuf::from(appdata).join("eir").join("token"))
     }
 
     pub fn load() -> Option<String> {
