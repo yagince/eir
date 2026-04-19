@@ -575,6 +575,17 @@
     repoSuggestionsFrom(items, excludedRepos),
   );
 
+  const orgSuggestions = $derived.by<string[]>(() => {
+    const seen = new Set<string>();
+    for (const item of items) {
+      const owner = item.repo.split("/")[0];
+      if (!owner) continue;
+      if (watchedOrgs.has(owner)) continue;
+      seen.add(owner);
+    }
+    return [...seen].sort();
+  });
+
   const visibleItems = $derived(
     filterVisible(items, {
       tab: activeTab,
@@ -708,10 +719,16 @@
           <div class="excluded-add">
             <input
               type="text"
+              list="org-suggestions"
               placeholder="org login (e.g. Lecto-inc)"
               bind:value={newWatchedOrg}
               onkeydown={(e) => e.key === "Enter" && addWatchedOrg()}
             />
+            <datalist id="org-suggestions">
+              {#each orgSuggestions as org (org)}
+                <option value={org}></option>
+              {/each}
+            </datalist>
             <button class="secondary" onclick={addWatchedOrg}>Add</button>
           </div>
         </div>
