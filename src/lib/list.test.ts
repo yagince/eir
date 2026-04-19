@@ -20,6 +20,7 @@ function makeItem(
     comments: 0,
     updated_at: "2026-01-01T00:00:00Z",
     state: "open",
+    is_draft: false,
     reviewers: [],
     ci_status: null,
     ...overrides,

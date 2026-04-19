@@ -52,6 +52,7 @@ pub struct WatchedItem {
     comments: u32,
     updated_at: String,
     state: &'static str,
+    is_draft: bool,
     reviewers: Vec<Reviewer>,
     ci_status: Option<&'static str>, // "success" | "pending" | "failure" | "error"
 }
@@ -77,6 +78,7 @@ query($q: String!) {
         url
         updatedAt
         state
+        isDraft
         comments { totalCount }
         repository { nameWithOwner }
         author {
@@ -170,6 +172,8 @@ struct PrNode {
     url: String,
     updated_at: String,
     state: String,
+    #[serde(default)]
+    is_draft: bool,
     comments: CountNode,
     repository: RepoNode,
     author: Option<AuthorNode>,
@@ -356,6 +360,7 @@ fn pr_to_item(pr: PrNode) -> WatchedItem {
         comments: pr.comments.total_count,
         updated_at: pr.updated_at,
         state: map_item_state(&pr.state),
+        is_draft: pr.is_draft,
         reviewers,
         ci_status,
     }
@@ -385,6 +390,7 @@ fn issue_to_item(issue: IssueNode) -> WatchedItem {
         comments: issue.comments.total_count,
         updated_at: issue.updated_at,
         state: map_item_state(&issue.state),
+        is_draft: false,
         reviewers: Vec::new(),
         ci_status: None,
     }
@@ -814,5 +820,28 @@ mod tests {
         assert_eq!(item.repo, "o/r");
         assert_eq!(item.state, "open");
         assert_eq!(item.author, "author");
+        assert!(!item.is_draft);
+    }
+
+    #[test]
+    fn pr_to_item_surfaces_draft_flag() {
+        let pr: PrNode = serde_json::from_value(json!({
+            "databaseId": 1,
+            "title": "t",
+            "number": 1,
+            "url": "https://github.com/o/r/pull/1",
+            "updatedAt": "2026-01-01T00:00:00Z",
+            "state": "OPEN",
+            "isDraft": true,
+            "comments": { "totalCount": 0 },
+            "repository": { "nameWithOwner": "o/r" },
+            "author": { "login": "author", "avatarUrl": "a" },
+            "reviews": { "nodes": [] },
+            "reviewRequests": { "nodes": [] },
+            "commits": { "nodes": [] }
+        }))
+        .unwrap();
+        let item = pr_to_item(pr);
+        assert!(item.is_draft);
     }
 }

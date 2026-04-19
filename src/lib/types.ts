@@ -23,6 +23,7 @@ export type WatchedItem = {
   comments: number;
   updated_at: string;
   state: string;
+  is_draft: boolean;
   reviewers: Reviewer[];
   ci_status: CiStatus | null;
 };

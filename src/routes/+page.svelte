@@ -61,6 +61,7 @@
   let toggleShortcut = $state<string>("Ctrl+Shift+E");
   let capturingShortcut = $state(false);
   let shortcutError = $state<string | null>(null);
+  let selectedId = $state<number | null>(null);
   const excludedRepos = new SvelteSet<string>(loadExcludedRepos());
   const hiddenItems = new SvelteSet<number>(loadHiddenItems());
   let newExcludedRepo = $state("");
@@ -373,28 +374,31 @@
       return;
     }
 
-    // Arrow / Page / Home / End scroll the list without requiring focus on
-    // the scroll container, so the keyboard-only flow works from the moment
-    // the popup opens.
+    // Arrow keys walk the selection, Enter opens, Page/Home/End still scroll.
     if (phase === "loaded" && !showingSettings) {
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
 
-      const list = document.querySelector<HTMLElement>(".list");
-      if (!list) return;
-
-      const step = 48;
-      const page = Math.max(list.clientHeight - 40, step);
       switch (e.key) {
         case "ArrowDown":
-          list.scrollBy({ top: step });
+          moveSelection(1);
           e.preventDefault();
           return;
         case "ArrowUp":
-          list.scrollBy({ top: -step });
+          moveSelection(-1);
           e.preventDefault();
           return;
+        case "Enter":
+          openSelected();
+          e.preventDefault();
+          return;
+      }
+
+      const list = document.querySelector<HTMLElement>(".list");
+      if (!list) return;
+      const page = Math.max(list.clientHeight - 40, 48);
+      switch (e.key) {
         case "PageDown":
           list.scrollBy({ top: page });
           e.preventDefault();
@@ -544,6 +548,48 @@
   const groups = $derived(
     groupByRepo(visibleItems, (i) => notificationsByKey.has(itemKey(i))),
   );
+
+  // Flat item order matching the rendered list (repo-groups preserved), so
+  // ArrowUp/ArrowDown can walk items without tripping over the group headers.
+  const flatItems = $derived(groups.flatMap((g) => g.items));
+
+  $effect(() => {
+    // Keep selectedId valid when the list changes (refresh, tab switch, etc.).
+    if (flatItems.length === 0) {
+      selectedId = null;
+    } else if (
+      selectedId == null ||
+      !flatItems.some((i) => i.id === selectedId)
+    ) {
+      selectedId = flatItems[0].id;
+    }
+  });
+
+  function moveSelection(delta: number) {
+    if (flatItems.length === 0) return;
+    const currentIdx =
+      selectedId != null
+        ? flatItems.findIndex((i) => i.id === selectedId)
+        : -1;
+    const nextIdx = Math.max(
+      0,
+      Math.min(flatItems.length - 1, (currentIdx < 0 ? 0 : currentIdx) + delta),
+    );
+    selectedId = flatItems[nextIdx].id;
+    // Schedule scrollIntoView after Svelte re-renders the selected class.
+    queueMicrotask(() => {
+      const el = document.querySelector<HTMLElement>(
+        `[data-item-id="${selectedId}"]`,
+      );
+      el?.scrollIntoView({ block: "nearest" });
+    });
+  }
+
+  function openSelected() {
+    if (selectedId == null) return;
+    const item = flatItems.find((i) => i.id === selectedId);
+    if (item) void openItem(item);
+  }
 </script>
 
 <main class="container">
@@ -705,17 +751,24 @@
             </div>
             <ul class="group-items">
               {#each group.items as item (item.id)}
-                <li class="item-row">
+                <li class="item-row" data-item-id={item.id}>
                   <button
                     class="item"
                     class:unread={notificationsByKey.has(itemKey(item))}
+                    class:selected={item.id === selectedId}
+                    class:draft={item.is_draft}
                     onclick={() => openItem(item)}
                   >
                     <span class="badge" class:pr={item.kind === "pr"}>
                       {item.kind === "pr" ? "PR" : "IS"}
                     </span>
                     <span class="body">
-                      <span class="title">{item.title}</span>
+                      <span class="title">
+                        {#if item.is_draft}
+                          <span class="draft-label">DRAFT</span>
+                        {/if}
+                        <span class="title-text">{item.title}</span>
+                      </span>
                       <span class="meta">
                         <img
                           class="avatar"
@@ -1228,7 +1281,35 @@
     background: rgba(0, 0, 0, 0.05);
   }
 
-  .item.unread .title {
+  .item.selected {
+    background: rgba(9, 105, 218, 0.12);
+  }
+
+  .item.selected:hover {
+    background: rgba(9, 105, 218, 0.18);
+  }
+
+  .item.draft .title-text,
+  .item.draft .meta,
+  .item.draft .badge {
+    opacity: 0.55;
+  }
+
+  .draft-label {
+    display: inline-block;
+    padding: 0 5px;
+    margin-right: 6px;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: #9a6700;
+    background: rgba(154, 103, 0, 0.2);
+    border: 1px solid rgba(154, 103, 0, 0.5);
+    border-radius: 3px;
+    vertical-align: 1px;
+  }
+
+  .item.unread .title-text {
     font-weight: 600;
   }
 
@@ -1508,6 +1589,17 @@
       background: rgba(88, 166, 255, 0.18);
       border-color: #58a6ff;
       color: #58a6ff;
+    }
+    .item.selected {
+      background: rgba(88, 166, 255, 0.15);
+    }
+    .item.selected:hover {
+      background: rgba(88, 166, 255, 0.22);
+    }
+    .draft-label {
+      color: #d29922;
+      background: rgba(187, 128, 9, 0.2);
+      border-color: rgba(187, 128, 9, 0.5);
     }
   }
 </style>
