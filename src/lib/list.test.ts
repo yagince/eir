@@ -24,6 +24,7 @@ function makeItem(
     state: "open",
     is_draft: false,
     reviewers: [],
+    commenters: [],
     ci_status: null,
     ...overrides,
   };

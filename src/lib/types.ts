@@ -9,6 +9,11 @@ export type Reviewer = {
     | "pending";
 };
 
+export type Commenter = {
+  login: string;
+  avatar_url: string;
+};
+
 export type CiStatus = "success" | "pending" | "failure" | "error" | "unknown";
 
 export type WatchedItem = {
@@ -25,6 +30,7 @@ export type WatchedItem = {
   state: string;
   is_draft: boolean;
   reviewers: Reviewer[];
+  commenters: Commenter[];
   ci_status: CiStatus | null;
 };
 
