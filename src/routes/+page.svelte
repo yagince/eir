@@ -191,6 +191,37 @@
     void openUrl(item.url);
   }
 
+  type RepoGroup = {
+    repo: string;
+    items: WatchedItem[];
+    mostRecent: string;
+    unreadCount: number;
+  };
+
+  const groups = $derived.by<RepoGroup[]>(() => {
+    const byRepo = new Map<string, WatchedItem[]>();
+    for (const item of items) {
+      const bucket = byRepo.get(item.repo);
+      if (bucket) {
+        bucket.push(item);
+      } else {
+        byRepo.set(item.repo, [item]);
+      }
+    }
+    const result: RepoGroup[] = [];
+    for (const [repo, groupItems] of byRepo) {
+      groupItems.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+      result.push({
+        repo,
+        items: groupItems,
+        mostRecent: groupItems[0].updated_at,
+        unreadCount: groupItems.filter((i) => !seen.has(i.id)).length,
+      });
+    }
+    result.sort((a, b) => b.mostRecent.localeCompare(a.mostRecent));
+    return result;
+  });
+
   function relativeTime(iso: string): string {
     const diff = Date.now() - new Date(iso).getTime();
     const m = Math.floor(diff / 60000);
@@ -239,25 +270,37 @@
       </section>
     {:else}
       <ul class="list">
-        {#each items as item (item.id)}
-          <li>
-            <button
-              class="item"
-              class:unread={!seen.has(item.id)}
-              onclick={() => openItem(item)}
-            >
-              <span class="badge" class:pr={item.kind === "pr"}>
-                {item.kind === "pr" ? "PR" : "IS"}
-              </span>
-              <span class="body">
-                <span class="title">{item.title}</span>
-                <span class="meta">
-                  {item.repo}#{item.number} · {item.author} · {relativeTime(
-                    item.updated_at,
-                  )}
-                </span>
-              </span>
-            </button>
+        {#each groups as group (group.repo)}
+          <li class="group">
+            <div class="group-header">
+              <span class="group-repo">{group.repo}</span>
+              {#if group.unreadCount > 0}
+                <span class="group-count">{group.unreadCount}</span>
+              {/if}
+            </div>
+            <ul class="group-items">
+              {#each group.items as item (item.id)}
+                <li>
+                  <button
+                    class="item"
+                    class:unread={!seen.has(item.id)}
+                    onclick={() => openItem(item)}
+                  >
+                    <span class="badge" class:pr={item.kind === "pr"}>
+                      {item.kind === "pr" ? "PR" : "IS"}
+                    </span>
+                    <span class="body">
+                      <span class="title">{item.title}</span>
+                      <span class="meta">
+                        #{item.number} · {item.author} · {relativeTime(
+                          item.updated_at,
+                        )}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              {/each}
+            </ul>
           </li>
         {/each}
       </ul>
@@ -413,6 +456,48 @@
     list-style: none;
     margin: 0;
     padding: 0;
+  }
+
+  .group {
+    margin-bottom: 4px;
+  }
+
+  .group-header {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 8px 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(27, 27, 31, 0.55);
+    background: rgba(246, 246, 248, 0.98);
+    backdrop-filter: blur(8px);
+  }
+
+  .group-repo {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .group-count {
+    flex-shrink: 0;
+    margin-left: 8px;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-weight: 600;
+    color: white;
+    background: #0969da;
+    border-radius: 8px;
+  }
+
+  .group-items {
+    list-style: none;
+    margin: 0;
+    padding: 0;
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -524,8 +609,12 @@
     .meta,
     .hint,
     .waiting,
-    .signout {
+    .signout,
+    .group-header {
       color: rgba(236, 236, 239, 0.6);
+    }
+    .group-header {
+      background: rgba(30, 30, 32, 0.98);
     }
     .code {
       background: rgba(255, 255, 255, 0.05);
