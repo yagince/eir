@@ -8,6 +8,11 @@
   } from "@tauri-apps/plugin-notification";
   import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
   import { relaunch } from "@tauri-apps/plugin-process";
+  import {
+    disable as disableAutostart,
+    enable as enableAutostart,
+    isEnabled as isAutostartEnabled,
+  } from "@tauri-apps/plugin-autostart";
   import { onDestroy, onMount } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import {
@@ -76,6 +81,7 @@
     | { kind: "installed" }
     | { kind: "error"; message: string };
   let updateStatus = $state<UpdateStatus>({ kind: "idle" });
+  let autostartEnabled = $state<boolean | null>(null);
   const excludedRepos = new SvelteSet<string>(loadExcludedRepos());
   const hiddenItems = new SvelteSet<number>(loadHiddenItems());
   const watchedOrgs = new SvelteSet<string>(loadWatchedOrgs());
@@ -345,6 +351,25 @@
     }
   }
 
+  async function toggleAutostart(enabled: boolean) {
+    try {
+      if (enabled) {
+        await enableAutostart();
+      } else {
+        await disableAutostart();
+      }
+      autostartEnabled = await isAutostartEnabled();
+    } catch (e) {
+      console.warn("[eir] autostart toggle failed:", e);
+      // Re-read from the system so the UI doesn't drift from reality.
+      try {
+        autostartEnabled = await isAutostartEnabled();
+      } catch {
+        autostartEnabled = false;
+      }
+    }
+  }
+
   async function runUpdateCheck(opts: { interactive: boolean }) {
     if (updateStatus.kind === "checking" || updateStatus.kind === "downloading")
       return;
@@ -412,6 +437,14 @@
     // Silent update check on boot — if a new version is out, the Settings
     // button will show "Update available" and the user can choose to install.
     void runUpdateCheck({ interactive: false });
+    // Sync the autostart toggle with the actual system state. The plugin
+    // reads the LaunchAgent plist, so this catches changes made outside
+    // the app (e.g. the user disabled "Login Items" in System Settings).
+    try {
+      autostartEnabled = await isAutostartEnabled();
+    } catch {
+      autostartEnabled = false;
+    }
   });
 
   onDestroy(() => {
@@ -752,6 +785,15 @@
             type="checkbox"
             checked={notifyEnabled}
             onchange={(e) => onNotifyChange(e.currentTarget.checked)}
+          />
+        </label>
+        <label class="setting-row">
+          <span class="setting-label">Start at login</span>
+          <input
+            type="checkbox"
+            checked={autostartEnabled === true}
+            disabled={autostartEnabled === null}
+            onchange={(e) => toggleAutostart(e.currentTarget.checked)}
           />
         </label>
         <div class="setting-row">
