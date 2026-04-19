@@ -53,11 +53,27 @@ fn position_under_tray(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
         _ => return,
     };
 
+    let popup_top = tray_y + tray_h + 8;
     let win_size = window.outer_size().unwrap_or_default();
+    let popup_width = win_size.width as i32;
+
+    // Grow the popup to fill as much vertical screen space as possible,
+    // leaving room for the Dock.
+    if let Ok(Some(monitor)) = window.current_monitor() {
+        let m_pos = monitor.position();
+        let m_size = monitor.size();
+        let bottom = m_pos.y + m_size.height as i32;
+        let dock_margin = (80.0 * monitor.scale_factor()) as i32;
+        let target_height = (bottom - popup_top - dock_margin).max(400);
+        let _ = window.set_size(tauri::PhysicalSize {
+            width: popup_width as u32,
+            height: target_height as u32,
+        });
+    }
+
     let tray_center_x = tray_x + tray_w / 2;
-    let x = tray_center_x - (win_size.width as i32) / 2;
-    let y = tray_y + tray_h + 8;
-    let _ = window.set_position(PhysicalPosition { x, y });
+    let x = tray_center_x - popup_width / 2;
+    let _ = window.set_position(PhysicalPosition { x, y: popup_top });
 }
 
 pub fn setup(app: &App) -> tauri::Result<()> {
