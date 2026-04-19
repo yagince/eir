@@ -370,6 +370,48 @@
     if (e.metaKey && e.key === "," && !showingSettings && phase === "loaded") {
       e.preventDefault();
       showingSettings = true;
+      return;
+    }
+
+    // Arrow / Page / Home / End scroll the list without requiring focus on
+    // the scroll container, so the keyboard-only flow works from the moment
+    // the popup opens.
+    if (phase === "loaded" && !showingSettings) {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+      const list = document.querySelector<HTMLElement>(".list");
+      if (!list) return;
+
+      const step = 48;
+      const page = Math.max(list.clientHeight - 40, step);
+      switch (e.key) {
+        case "ArrowDown":
+          list.scrollBy({ top: step });
+          e.preventDefault();
+          return;
+        case "ArrowUp":
+          list.scrollBy({ top: -step });
+          e.preventDefault();
+          return;
+        case "PageDown":
+          list.scrollBy({ top: page });
+          e.preventDefault();
+          return;
+        case "PageUp":
+          list.scrollBy({ top: -page });
+          e.preventDefault();
+          return;
+        case "Home":
+          list.scrollTop = 0;
+          e.preventDefault();
+          return;
+        case "End":
+          list.scrollTop = list.scrollHeight;
+          e.preventDefault();
+          return;
+      }
     }
   }
 
