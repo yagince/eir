@@ -211,3 +211,16 @@ pub fn sign_out(auth: State<'_, Mutex<AppState>>) {
 pub fn set_window_pinned(pinned: bool, auth: State<'_, Mutex<AppState>>) {
     auth.lock().unwrap().pinned = pinned;
 }
+
+/// Put the popup into "dialog mode": pinned (so focus loss won't auto-hide)
+/// and not always-on-top (so a native dialog can actually appear above it).
+/// Revert with `dialog_mode=false` when the dialog is dismissed.
+#[tauri::command]
+pub fn set_dialog_mode(
+    enabled: bool,
+    window: tauri::WebviewWindow,
+    auth: State<'_, Mutex<AppState>>,
+) {
+    auth.lock().unwrap().pinned = enabled;
+    let _ = window.set_always_on_top(!enabled);
+}
