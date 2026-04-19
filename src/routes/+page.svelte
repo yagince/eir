@@ -1302,9 +1302,9 @@
     font-size: 9px;
     font-weight: 700;
     letter-spacing: 0.5px;
-    color: #9a6700;
-    background: rgba(154, 103, 0, 0.2);
-    border: 1px solid rgba(154, 103, 0, 0.5);
+    color: #57606a;
+    background: rgba(87, 96, 106, 0.15);
+    border: 1px solid rgba(87, 96, 106, 0.45);
     border-radius: 3px;
     vertical-align: 1px;
   }
@@ -1597,9 +1597,9 @@
       background: rgba(88, 166, 255, 0.22);
     }
     .draft-label {
-      color: #d29922;
-      background: rgba(187, 128, 9, 0.2);
-      border-color: rgba(187, 128, 9, 0.5);
+      color: #8b949e;
+      background: rgba(139, 148, 158, 0.18);
+      border-color: rgba(139, 148, 158, 0.5);
     }
   }
 </style>
