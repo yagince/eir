@@ -11,8 +11,48 @@ on:
         required: true
 
 jobs:
+  # Creates the draft release exactly once. Without this gate, each entry of
+  # the matrix below would race to call "create release" via tauri-action,
+  # producing one duplicate draft per losing racer (GitHub's "find-or-create"
+  # API is not atomic against concurrent callers). The matrix jobs then
+  # upload into the single release id this job outputs.
+  create-release:
+    name: create draft release
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create.outputs.result }}
+      tag_name: ${{ steps.tag.outputs.name }}
+    steps:
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "name=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create release
+        id: create
+        uses: actions/github-script@v9
+        env:
+          TAG: ${{ steps.tag.outputs.name }}
+        with:
+          script: |
+            const { TAG } = process.env;
+            const { data } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: TAG,
+              name: `eir ${TAG}`,
+              draft: true,
+              prerelease: false,
+            });
+            return data.id;
+
   build:
     name: build (${{ matrix.label }})
+    needs: create-release
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -74,16 +114,6 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Resolve tag
-        id: tag
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "name=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Build Tauri bundle
         uses: tauri-apps/tauri-action@v0
         env:
@@ -99,9 +129,9 @@ jobs:
           # will populate APPLE_CERTIFICATE / APPLE_SIGNING_IDENTITY and
           # enable real signing + notarization without changing the workflow.
         with:
-          tagName: ${{ steps.tag.outputs.name }}
-          releaseName: eir ${{ steps.tag.outputs.name }}
-          releaseDraft: true
-          prerelease: false
+          # Upload into the draft the create-release job already made rather
+          # than triggering tauri-action's own "find or create" path (which
+          # races across parallel matrix jobs and produces duplicate drafts).
+          releaseId: ${{ needs.create-release.outputs.release_id }}
           includeUpdaterJson: true
           args: --target ${{ matrix.target }}
