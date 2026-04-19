@@ -7,7 +7,6 @@
     sendNotification,
   } from "@tauri-apps/plugin-notification";
   import { onDestroy, onMount } from "svelte";
-  import { SvelteSet } from "svelte/reactivity";
 
   type WatchedItem = {
     id: number;
@@ -19,6 +18,17 @@
     author: string;
     updated_at: string;
     state: string;
+  };
+
+  type NotificationItem = {
+    thread_id: number;
+    reason: string;
+    repo: string;
+    kind: "pr" | "issue" | "commit" | "discussion" | "release" | "other";
+    number: number | null;
+    title: string;
+    url: string;
+    updated_at: string;
   };
 
   type DeviceCode = {
@@ -33,7 +43,6 @@
   type Tab = "all" | "authored" | "review" | "mentions";
 
   const DEFAULT_REFRESH_MS = 60_000;
-  const SEEN_KEY = "eir.seen";
   const TAB_KEY = "eir.tab";
   const INTERVAL_KEY = "eir.refreshMs";
   const NOTIFY_KEY = "eir.notifyEnabled";
@@ -60,9 +69,9 @@
   let showingSettings = $state(false);
   let refreshMs = $state<number>(loadIntervalFromStorage());
   let notifyEnabled = $state<boolean>(loadNotifyFromStorage());
+  let notifications = $state<NotificationItem[]>([]);
 
-  const seen = new SvelteSet<number>(loadSeenFromStorage());
-  let prevIds = new Set<number>();
+  let prevThreadIds = new Set<number>();
   let hasLoadedOnce = false;
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -82,22 +91,24 @@
     return localStorage.getItem(NOTIFY_KEY) !== "0";
   }
 
-  function loadSeenFromStorage(): number[] {
-    try {
-      const raw = localStorage.getItem(SEEN_KEY);
-      return raw ? JSON.parse(raw) : [];
-    } catch {
-      return [];
-    }
+  function itemKey(i: Pick<WatchedItem, "repo" | "kind" | "number">): string {
+    return `${i.repo}:${i.kind}:${i.number}`;
   }
 
-  function persistSeen() {
-    localStorage.setItem(SEEN_KEY, JSON.stringify([...seen]));
-  }
+  const notificationsByKey = $derived.by(() => {
+    const m = new Map<string, NotificationItem[]>();
+    for (const n of notifications) {
+      if (n.number == null) continue;
+      const k = `${n.repo}:${n.kind}:${n.number}`;
+      const existing = m.get(k);
+      if (existing) existing.push(n);
+      else m.set(k, [n]);
+    }
+    return m;
+  });
 
   function updateBadge() {
-    const count = items.filter((i) => !seen.has(i.id)).length;
-    void invoke("set_tray_badge", { count });
+    void invoke("set_tray_badge", { count: notifications.length });
   }
 
   function startRefresh() {
@@ -126,24 +137,26 @@
       error = null;
     }
     try {
-      const fetched = await invoke<WatchedItem[]>("fetch_watched", {
-        tab: activeTab,
-      });
-      const nextIds = new Set(fetched.map((i) => i.id));
+      const [fetchedItems, fetchedNotifs] = await Promise.all([
+        invoke<WatchedItem[]>("fetch_watched", { tab: activeTab }),
+        invoke<NotificationItem[]>("fetch_notifications"),
+      ]);
 
-      if (!hasLoadedOnce) {
-        for (const id of nextIds) seen.add(id);
-        persistSeen();
-        hasLoadedOnce = true;
-      } else {
-        const appeared = fetched.filter((i) => !prevIds.has(i.id));
-        if (appeared.length > 0) {
-          await notify(appeared);
+      const nextThreadIds = new Set(fetchedNotifs.map((n) => n.thread_id));
+
+      if (hasLoadedOnce) {
+        const fresh = fetchedNotifs.filter(
+          (n) => !prevThreadIds.has(n.thread_id),
+        );
+        if (fresh.length > 0) {
+          await notify(fresh);
         }
       }
 
-      items = fetched;
-      prevIds = nextIds;
+      items = fetchedItems;
+      notifications = fetchedNotifs;
+      prevThreadIds = nextThreadIds;
+      hasLoadedOnce = true;
       phase = "loaded";
       updateBadge();
       startRefresh();
@@ -162,20 +175,45 @@
   function resetToIdle() {
     stopRefresh();
     items = [];
-    prevIds = new Set();
+    notifications = [];
+    prevThreadIds = new Set();
     hasLoadedOnce = false;
     phase = "idle";
     void invoke("set_tray_badge", { count: 0 });
   }
 
-  async function notify(newItems: WatchedItem[]) {
+  function reasonLabel(reason: string): string {
+    switch (reason) {
+      case "review_requested":
+        return "Review requested";
+      case "mention":
+        return "You were mentioned";
+      case "team_mention":
+        return "Your team was mentioned";
+      case "comment":
+        return "New comment";
+      case "assign":
+        return "Assigned to you";
+      case "author":
+        return "Activity on your PR";
+      case "state_change":
+        return "State changed";
+      case "ci_activity":
+        return "CI update";
+      default:
+        return "New activity";
+    }
+  }
+
+  async function notify(fresh: NotificationItem[]) {
     if (!notifyEnabled) return;
     if (!(await ensureNotificationPermission())) return;
-    for (const item of newItems) {
-      const kind = item.kind === "pr" ? "PR" : "Issue";
+    for (const n of fresh) {
+      const suffix =
+        n.number != null ? `${n.repo}#${n.number}` : n.repo;
       sendNotification({
-        title: `New ${kind}`,
-        body: `${item.repo}#${item.number} — ${item.title}`,
+        title: reasonLabel(n.reason),
+        body: `${suffix} — ${n.title}`,
       });
     }
   }
@@ -238,11 +276,20 @@
     }
   }
 
-  function openItem(item: WatchedItem) {
-    seen.add(item.id);
-    persistSeen();
-    updateBadge();
+  async function openItem(item: WatchedItem) {
     void openUrl(item.url);
+    const matching = notificationsByKey.get(itemKey(item)) ?? [];
+    if (matching.length === 0) return;
+    const toClear = new Set(matching.map((n) => n.thread_id));
+    notifications = notifications.filter((n) => !toClear.has(n.thread_id));
+    updateBadge();
+    await Promise.all(
+      matching.map((n) =>
+        invoke("mark_notification_read", { threadId: n.thread_id }).catch(
+          () => {},
+        ),
+      ),
+    );
   }
 
   function onIntervalChange(value: number) {
@@ -260,8 +307,6 @@
     if (tab === activeTab) return;
     activeTab = tab;
     localStorage.setItem(TAB_KEY, tab);
-    hasLoadedOnce = false;
-    prevIds = new Set();
     items = [];
     await loadItems();
   }
@@ -290,7 +335,8 @@
         repo,
         items: groupItems,
         mostRecent: groupItems[0].updated_at,
-        unreadCount: groupItems.filter((i) => !seen.has(i.id)).length,
+        unreadCount: groupItems.filter((i) => notificationsByKey.has(itemKey(i)))
+          .length,
       });
     }
     result.sort((a, b) => b.mostRecent.localeCompare(a.mostRecent));
@@ -401,7 +447,7 @@
                 <li>
                   <button
                     class="item"
-                    class:unread={!seen.has(item.id)}
+                    class:unread={notificationsByKey.has(itemKey(item))}
                     onclick={() => openItem(item)}
                   >
                     <span class="badge" class:pr={item.kind === "pr"}>

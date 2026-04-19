@@ -1,6 +1,6 @@
 use std::sync::Mutex;
 
-use octocrab::models::IssueState;
+use octocrab::models::{IssueState, NotificationId};
 use serde::Serialize;
 use tauri::State;
 
@@ -11,6 +11,19 @@ fn is_unauthorized(err: &octocrab::Error) -> bool {
         return source.status_code.as_u16() == 401;
     }
     false
+}
+
+fn build_octo(auth: &Mutex<AppState>) -> Result<octocrab::Octocrab, String> {
+    let token = auth
+        .lock()
+        .unwrap()
+        .token
+        .clone()
+        .ok_or("not_authenticated")?;
+    octocrab::OctocrabBuilder::new()
+        .personal_token(token)
+        .build()
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Serialize)]
@@ -40,17 +53,7 @@ pub async fn fetch_watched(
     tab: String,
     auth: State<'_, Mutex<AppState>>,
 ) -> Result<Vec<WatchedItem>, String> {
-    let token = auth
-        .lock()
-        .unwrap()
-        .token
-        .clone()
-        .ok_or("not_authenticated")?;
-
-    let octo = octocrab::OctocrabBuilder::new()
-        .personal_token(token)
-        .build()
-        .map_err(|e| e.to_string())?;
+    let octo = build_octo(&auth)?;
 
     let page = match octo
         .search()
@@ -105,4 +108,118 @@ pub async fn fetch_watched(
         .collect();
 
     Ok(items)
+}
+
+#[derive(Serialize)]
+pub struct NotificationItem {
+    thread_id: u64,
+    reason: String,
+    repo: String,
+    kind: &'static str,
+    number: Option<u64>,
+    title: String,
+    url: String,
+    updated_at: String,
+}
+
+fn subject_kind(type_name: &str) -> &'static str {
+    match type_name {
+        "PullRequest" => "pr",
+        "Issue" => "issue",
+        "Commit" => "commit",
+        "Discussion" => "discussion",
+        "Release" => "release",
+        _ => "other",
+    }
+}
+
+fn extract_number(api_url: Option<&str>) -> Option<u64> {
+    api_url?.rsplit('/').next()?.parse().ok()
+}
+
+/// GitHub notification subject URLs are API URLs like
+/// `https://api.github.com/repos/OWNER/REPO/pulls/123`. Map back to the
+/// web URL the user actually wants to open.
+fn subject_html_url(api_url: Option<&str>, repo: &str, kind: &str, number: Option<u64>) -> String {
+    if let (Some(n), "pr") = (number, kind) {
+        return format!("https://github.com/{repo}/pull/{n}");
+    }
+    if let (Some(n), "issue") = (number, kind) {
+        return format!("https://github.com/{repo}/issues/{n}");
+    }
+    api_url.map(String::from).unwrap_or_default()
+}
+
+#[tauri::command]
+pub async fn fetch_notifications(
+    auth: State<'_, Mutex<AppState>>,
+) -> Result<Vec<NotificationItem>, String> {
+    let octo = build_octo(&auth)?;
+
+    let page = match octo
+        .activity()
+        .notifications()
+        .list()
+        .all(false)
+        .per_page(50)
+        .send()
+        .await
+    {
+        Ok(p) => p,
+        Err(err) => {
+            if is_unauthorized(&err) {
+                clear_stored_token(&auth);
+                return Err("not_authenticated".into());
+            }
+            return Err(err.to_string());
+        }
+    };
+
+    let notifications = page
+        .items
+        .into_iter()
+        .map(|n| {
+            let kind = subject_kind(&n.subject.r#type);
+            let url_str = n.subject.url.as_ref().map(|u| u.as_str());
+            let number = extract_number(url_str);
+            let repo = n.repository.full_name.clone().unwrap_or_default();
+            let url = subject_html_url(url_str, &repo, kind, number);
+            NotificationItem {
+                thread_id: n.id.0,
+                reason: n.reason,
+                repo,
+                kind,
+                number,
+                title: n.subject.title,
+                url,
+                updated_at: n.updated_at.to_rfc3339(),
+            }
+        })
+        .collect();
+
+    Ok(notifications)
+}
+
+#[tauri::command]
+pub async fn mark_notification_read(
+    thread_id: u64,
+    auth: State<'_, Mutex<AppState>>,
+) -> Result<(), String> {
+    let octo = build_octo(&auth)?;
+
+    match octo
+        .activity()
+        .notifications()
+        .mark_as_read(NotificationId(thread_id))
+        .await
+    {
+        Ok(_) => Ok(()),
+        Err(err) => {
+            if is_unauthorized(&err) {
+                clear_stored_token(&auth);
+                return Err("not_authenticated".into());
+            }
+            Err(err.to_string())
+        }
+    }
 }

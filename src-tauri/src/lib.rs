@@ -42,6 +42,8 @@ pub fn run() {
             auth::sign_out,
             auth::set_window_pinned,
             github::fetch_watched,
+            github::fetch_notifications,
+            github::mark_notification_read,
             tray::set_tray_badge,
         ])
         .setup(|app| {
