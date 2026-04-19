@@ -1,5 +1,6 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { getVersion } from "@tauri-apps/api/app";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import {
     isPermissionGranted,
@@ -96,6 +97,7 @@
     | { kind: "installed" }
     | { kind: "error"; message: string };
   let updateStatus = $state<UpdateStatus>({ kind: "idle" });
+  let appVersion = $state<string>("");
   let autostartEnabled = $state<boolean | null>(null);
   const excludedRepos = new SvelteSet<string>(loadExcludedRepos());
   const hiddenItems = new SvelteSet<number>(loadHiddenItems());
@@ -444,6 +446,11 @@
       toggleShortcut = await invoke<string>("get_toggle_shortcut");
     } catch {
       // keep default
+    }
+    try {
+      appVersion = await getVersion();
+    } catch {
+      // leave empty
     }
     window.addEventListener("keydown", handleGlobalKey);
     void loadItems({ silent: true });
@@ -817,17 +824,20 @@
         <div class="setting-row">
           <span class="setting-label">
             Check for updates
+            {#if appVersion}
+              <span class="setting-hint-inline">— v{appVersion}</span>
+            {/if}
             {#if updateStatus.kind === "up-to-date"}
-              <span class="setting-hint-inline">— already latest</span>
+              <span class="setting-hint-inline">· already latest</span>
             {:else if updateStatus.kind === "available"}
               <span class="setting-hint-inline update-available"
-                >— v{updateStatus.version} available</span
+                >· v{updateStatus.version} available</span
               >
             {:else if updateStatus.kind === "installed"}
-              <span class="setting-hint-inline">— installed, relaunching…</span>
+              <span class="setting-hint-inline">· installed, relaunching…</span>
             {:else if updateStatus.kind === "error"}
               <span class="setting-hint-inline error-inline"
-                >— {updateStatus.message}</span
+                >· {updateStatus.message}</span
               >
             {/if}
           </span>
