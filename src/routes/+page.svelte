@@ -1078,6 +1078,21 @@
                           {/each}
                         </span>
                       {/if}
+                      {#if item.commenters.length > 0}
+                        <span class="commenters">
+                          {#each item.commenters as c (c.login)}
+                            <span class="commenter-chip" title={c.login}>
+                              <img
+                                class="commenter-chip-avatar"
+                                src={c.avatar_url}
+                                alt=""
+                                loading="lazy"
+                              />
+                              <span class="commenter-chip-name">{c.login}</span>
+                            </span>
+                          {/each}
+                        </span>
+                      {/if}
                     </span>
                   </button>
                   {#if activeTab === "hidden"}
@@ -1757,6 +1772,41 @@
     text-decoration: line-through;
   }
 
+  .commenters {
+    display: flex;
+    gap: 4px;
+    margin-top: 4px;
+    flex-wrap: wrap;
+  }
+
+  .commenter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px 2px 2px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+    max-width: 100%;
+    min-width: 0;
+    background: rgba(87, 96, 106, 0.15);
+    color: #57606a;
+  }
+
+  .commenter-chip-avatar {
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .commenter-chip-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
   @media (prefers-color-scheme: dark) {
     :global(:root) {
       color: #ececef;
@@ -1841,6 +1891,10 @@
     .reviewer-dismissed {
       background: rgba(139, 148, 158, 0.12);
       color: rgba(139, 148, 158, 0.7);
+    }
+    .commenter-chip {
+      background: rgba(139, 148, 158, 0.2);
+      color: #8b949e;
     }
     .row-action {
       color: rgba(236, 236, 239, 0.4);

@@ -39,6 +39,13 @@ pub struct Reviewer {
     state: &'static str, // "approved" | "changes_requested" | "commented" | "dismissed" | "pending"
 }
 
+#[derive(Serialize, Clone)]
+#[cfg_attr(test, derive(Debug))]
+pub struct Commenter {
+    login: String,
+    avatar_url: String,
+}
+
 #[derive(Serialize)]
 pub struct WatchedItem {
     id: u64,
@@ -54,6 +61,7 @@ pub struct WatchedItem {
     state: &'static str,
     is_draft: bool,
     reviewers: Vec<Reviewer>,
+    commenters: Vec<Commenter>,
     ci_status: Option<&'static str>, // "success" | "pending" | "failure" | "error"
 }
 
@@ -134,7 +142,16 @@ fragment IssueFields on Issue {
   url
   updatedAt
   state
-  comments { totalCount }
+  comments(last: 20) {
+    totalCount
+    nodes {
+      author {
+        login
+        ... on User { avatarUrl }
+        ... on Bot { avatarUrl }
+      }
+    }
+  }
   repository { nameWithOwner }
   author {
     login
@@ -214,7 +231,7 @@ struct IssueNode {
     url: String,
     updated_at: String,
     state: String,
-    comments: CountNode,
+    comments: IssueCommentsNode,
     repository: RepoNode,
     author: Option<AuthorNode>,
 }
@@ -223,6 +240,19 @@ struct IssueNode {
 #[serde(rename_all = "camelCase")]
 struct CountNode {
     total_count: u32,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IssueCommentsNode {
+    total_count: u32,
+    #[serde(default)]
+    nodes: Vec<Option<IssueCommentNode>>,
+}
+
+#[derive(Deserialize)]
+struct IssueCommentNode {
+    author: Option<AuthorNode>,
 }
 
 #[derive(Deserialize)]
@@ -385,6 +415,7 @@ fn pr_to_item(pr: PrNode) -> WatchedItem {
         state: map_item_state(&pr.state),
         is_draft: pr.is_draft,
         reviewers,
+        commenters: Vec::new(),
         ci_status,
     }
 }
@@ -401,6 +432,24 @@ fn issue_to_item(issue: IssueNode) -> WatchedItem {
         .and_then(|a| a.avatar_url.clone())
         .unwrap_or_default();
 
+    // Dedupe commenters by login, preserving the order of their first
+    // appearance in the (last-N) comments slice. The issue author is kept
+    // in the list too — they often drive the discussion and showing only
+    // "others" would hide that. The frontend can decide whether to draw
+    // the author chip differently.
+    let mut seen_logins: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut commenters: Vec<Commenter> = Vec::new();
+    for c in issue.comments.nodes.into_iter().flatten() {
+        let Some(user) = c.author else { continue };
+        if !seen_logins.insert(user.login.clone()) {
+            continue;
+        }
+        commenters.push(Commenter {
+            login: user.login,
+            avatar_url: user.avatar_url.unwrap_or_default(),
+        });
+    }
+
     WatchedItem {
         id: issue.database_id,
         kind: "issue",
@@ -415,6 +464,7 @@ fn issue_to_item(issue: IssueNode) -> WatchedItem {
         state: map_item_state(&issue.state),
         is_draft: false,
         reviewers: Vec::new(),
+        commenters,
         ci_status: None,
     }
 }
@@ -970,7 +1020,53 @@ mod tests {
         assert_eq!(item.state, "open");
         assert!(!item.is_draft);
         assert!(item.reviewers.is_empty());
+        assert!(item.commenters.is_empty());
         assert!(item.ci_status.is_none());
+    }
+
+    fn make_issue_node_with_comments(nodes: serde_json::Value) -> IssueNode {
+        serde_json::from_value(json!({
+            "databaseId": 1,
+            "title": "t",
+            "number": 1,
+            "url": "https://github.com/o/r/issues/1",
+            "updatedAt": "2026-01-01T00:00:00Z",
+            "state": "OPEN",
+            "comments": { "totalCount": 0, "nodes": nodes },
+            "repository": { "nameWithOwner": "o/r" },
+            "author": { "login": "author", "avatarUrl": "a" }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn issue_commenters_dedupe_by_login_preserving_first_seen_order() {
+        let item = issue_to_item(make_issue_node_with_comments(json!([
+            { "author": { "login": "alice", "avatarUrl": "a" } },
+            { "author": { "login": "bob",   "avatarUrl": "b" } },
+            { "author": { "login": "alice", "avatarUrl": "a" } }
+        ])));
+        let logins: Vec<_> = item.commenters.iter().map(|c| c.login.as_str()).collect();
+        assert_eq!(logins, vec!["alice", "bob"]);
+    }
+
+    #[test]
+    fn issue_commenters_skip_anonymous_and_null_nodes() {
+        // A deleted-user GitHub comment surfaces as `author: null`; skip it
+        // rather than pushing an empty-login chip.
+        let item = issue_to_item(make_issue_node_with_comments(json!([
+            { "author": null },
+            { "author": { "login": "alice", "avatarUrl": "a" } }
+        ])));
+        let logins: Vec<_> = item.commenters.iter().map(|c| c.login.as_str()).collect();
+        assert_eq!(logins, vec!["alice"]);
+    }
+
+    #[test]
+    fn issue_commenters_empty_when_no_comments_field_nodes() {
+        // Legacy/older backend shape without `nodes` must still deserialize.
+        let item = issue_to_item(make_issue_node(10, "o/r", 7));
+        assert!(item.commenters.is_empty());
     }
 
     #[test]
