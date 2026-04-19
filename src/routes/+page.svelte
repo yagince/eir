@@ -552,16 +552,24 @@
                       {#if item.reviewers.length > 0}
                         <span class="reviewers">
                           {#each item.reviewers as r (r.login)}
-                            <img
-                              class="reviewer reviewer-{r.state}"
-                              src={r.avatar_url}
-                              alt=""
-                              loading="lazy"
-                              title="{r.login}: {r.state.replace(
-                                '_',
-                                ' ',
-                              )}"
-                            />
+                            <span class="reviewer-chip reviewer-{r.state}">
+                              <img
+                                class="reviewer-chip-avatar"
+                                src={r.avatar_url}
+                                alt=""
+                                loading="lazy"
+                              />
+                              <span class="reviewer-chip-name">{r.login}</span>
+                              <span class="reviewer-chip-state">
+                                {#if r.state === "approved"}
+                                  approved
+                                {:else if r.state === "changes_requested"}
+                                  changes
+                                {:else}
+                                  not yet
+                                {/if}
+                              </span>
+                            </span>
                           {/each}
                         </span>
                       {/if}
@@ -1026,29 +1034,56 @@
 
   .reviewers {
     display: flex;
-    gap: 2px;
-    margin-top: 2px;
+    gap: 4px;
+    margin-top: 4px;
     flex-wrap: wrap;
   }
 
-  .reviewer {
-    width: 16px;
-    height: 16px;
+  .reviewer-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px 2px 2px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: 500;
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .reviewer-chip-avatar {
+    width: 14px;
+    height: 14px;
     border-radius: 50%;
-    border: 2px solid transparent;
-    box-sizing: content-box;
+    flex-shrink: 0;
+  }
+
+  .reviewer-chip-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .reviewer-chip-state {
+    flex-shrink: 0;
+    opacity: 0.8;
+    font-weight: 400;
   }
 
   .reviewer-approved {
-    border-color: #1a7f37;
+    background: rgba(26, 127, 55, 0.15);
+    color: #1a7f37;
   }
 
   .reviewer-changes_requested {
-    border-color: #d1242f;
+    background: rgba(209, 36, 47, 0.15);
+    color: #d1242f;
   }
 
   .reviewer-pending {
-    border-color: #9a6700;
+    background: rgba(154, 103, 0, 0.15);
+    color: #9a6700;
   }
 
   footer {
@@ -1122,6 +1157,18 @@
     }
     .icon-btn:hover {
       background: rgba(255, 255, 255, 0.14);
+    }
+    .reviewer-approved {
+      background: rgba(46, 160, 67, 0.2);
+      color: #3fb950;
+    }
+    .reviewer-changes_requested {
+      background: rgba(248, 81, 73, 0.2);
+      color: #ff7b72;
+    }
+    .reviewer-pending {
+      background: rgba(187, 128, 9, 0.2);
+      color: #d29922;
     }
   }
 </style>
