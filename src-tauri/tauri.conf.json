@@ -14,8 +14,8 @@
       {
         "label": "main",
         "title": "eir",
-        "width": 380,
-        "height": 520,
+        "width": 440,
+        "height": 680,
         "visible": false,
         "decorations": false,
         "resizable": false,
