@@ -4,7 +4,14 @@ use octocrab::models::IssueState;
 use serde::Serialize;
 use tauri::State;
 
-use crate::auth::AppState;
+use crate::auth::{clear_stored_token, AppState};
+
+fn is_unauthorized(err: &octocrab::Error) -> bool {
+    if let octocrab::Error::GitHub { source, .. } = err {
+        return source.status_code.as_u16() == 401;
+    }
+    false
+}
 
 #[derive(Serialize)]
 pub struct WatchedItem {
@@ -45,7 +52,7 @@ pub async fn fetch_watched(
         .build()
         .map_err(|e| e.to_string())?;
 
-    let page = octo
+    let page = match octo
         .search()
         .issues_and_pull_requests(query_for_tab(&tab))
         .sort("updated")
@@ -53,7 +60,16 @@ pub async fn fetch_watched(
         .per_page(50)
         .send()
         .await
-        .map_err(|e| e.to_string())?;
+    {
+        Ok(page) => page,
+        Err(err) => {
+            if is_unauthorized(&err) {
+                clear_stored_token(&auth);
+                return Err("not_authenticated".into());
+            }
+            return Err(err.to_string());
+        }
+    };
 
     let items = page
         .items

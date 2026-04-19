@@ -148,10 +148,24 @@
       updateBadge();
       startRefresh();
     } catch (e) {
-      if (!silent) error = String(e);
+      const msg = String(e);
+      if (msg.includes("not_authenticated")) {
+        resetToIdle();
+      } else if (!silent) {
+        error = msg;
+      }
     } finally {
       if (!silent) loading = false;
     }
+  }
+
+  function resetToIdle() {
+    stopRefresh();
+    items = [];
+    prevIds = new Set();
+    hasLoadedOnce = false;
+    phase = "idle";
+    void invoke("set_tray_badge", { count: 0 });
   }
 
   async function notify(newItems: WatchedItem[]) {
@@ -209,13 +223,8 @@
   }
 
   async function signOut() {
-    stopRefresh();
     await invoke("sign_out");
-    void invoke("set_tray_badge", { count: 0 });
-    items = [];
-    prevIds = new Set();
-    hasLoadedOnce = false;
-    phase = "idle";
+    resetToIdle();
   }
 
   async function copyCode() {

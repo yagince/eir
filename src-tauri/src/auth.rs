@@ -138,12 +138,16 @@ pub async fn poll_device_flow(
     }
 }
 
-#[tauri::command]
-pub fn sign_out(auth: State<'_, Mutex<AppState>>) {
+pub fn clear_stored_token(auth: &Mutex<AppState>) {
     auth.lock().unwrap().token = None;
     if let Ok(entry) = keyring_entry() {
         let _ = entry.delete_credential();
     }
+}
+
+#[tauri::command]
+pub fn sign_out(auth: State<'_, Mutex<AppState>>) {
+    clear_stored_token(&auth);
 }
 
 #[tauri::command]
