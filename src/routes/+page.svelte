@@ -4,7 +4,6 @@
   import {
     isPermissionGranted,
     requestPermission,
-    sendNotification,
   } from "@tauri-apps/plugin-notification";
   import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
   import { relaunch } from "@tauri-apps/plugin-process";
@@ -71,6 +70,22 @@
   let capturingShortcut = $state(false);
   let shortcutError = $state<string | null>(null);
   let selectedId = $state<number | null>(null);
+
+  // The notification plugin's sendNotification() just invokes
+  // `new window.Notification(title, options)` under the hood and throws away
+  // the Notification instance — its desktop backend never emits the
+  // `actionPerformed` event that `onAction` listens for (that wiring only
+  // exists on iOS/Android). So to handle clicks we create the Notification
+  // ourselves and attach `.onclick` directly.
+  function showNotification(title: string, body: string, url?: string) {
+    const n = new Notification(title, { body });
+    if (url) {
+      n.onclick = () => {
+        void openUrl(url);
+        n.close();
+      };
+    }
+  }
 
   type UpdateStatus =
     | { kind: "idle" }
@@ -321,10 +336,11 @@
       console.info(
         `[eir] sending item-change notification: ${reason} — ${item.repo}#${item.number}`,
       );
-      sendNotification({
-        title: reason,
-        body: `${item.repo}#${item.number} — ${item.title}`,
-      });
+      showNotification(
+        reason,
+        `${item.repo}#${item.number} — ${item.title}`,
+        item.url,
+      );
     }
   }
 
@@ -344,10 +360,7 @@
       console.info(
         `[eir] sending notification: ${reasonLabel(n.reason)} — ${suffix}`,
       );
-      sendNotification({
-        title: reasonLabel(n.reason),
-        body: `${suffix} — ${n.title}`,
-      });
+      showNotification(reasonLabel(n.reason), `${suffix} — ${n.title}`, n.url);
     }
   }
 
@@ -407,10 +420,10 @@
         "OS notification permission not granted. Check System Settings → Notifications → eir.";
       return;
     }
-    sendNotification({
-      title: "eir test notification",
-      body: "If you see this, notifications are working.",
-    });
+    showNotification(
+      "eir test notification",
+      "If you see this, notifications are working.",
+    );
   }
 
   async function ensureNotificationPermission(): Promise<boolean> {
