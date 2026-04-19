@@ -6,12 +6,12 @@
     <title>eir — a menubar watcher for GitHub PRs & Issues</title>
     <meta
       name="description"
-      content="eir is a macOS menubar app that watches GitHub PRs and Issues. A from-scratch alternative to Trailer / Neat, built with Tauri and SvelteKit."
+      content="eir is a cross-platform menubar app that watches GitHub PRs and Issues. A from-scratch alternative to Trailer / Neat, built with Tauri and SvelteKit."
     />
     <meta property="og:title" content="eir — menubar GitHub PR/Issue watcher" />
     <meta
       property="og:description"
-      content="A macOS menubar app that watches GitHub PRs and Issues. Built with Tauri v2 + SvelteKit."
+      content="A menubar app that watches GitHub PRs and Issues on macOS, Windows, and Linux. Built with Tauri v2 + SvelteKit."
     />
     <meta property="og:type" content="website" />
     <meta property="og:image" content="assets/screenshot.png" />
@@ -25,8 +25,8 @@
         <img class="logo" src="assets/icon-256.png" alt="eir icon" width="128" height="128" />
         <h1>eir</h1>
         <p class="tagline">
-          A macOS menubar app that watches GitHub PRs and Issues.<br />
-          A from-scratch alternative to Trailer / Neat.
+          A menubar / system-tray app that watches GitHub PRs and Issues.<br />
+          A from-scratch alternative to Trailer / Neat — macOS, Windows, Linux.
         </p>
 
         <div class="cta">
@@ -42,7 +42,21 @@
             class="btn secondary"
             href="https://github.com/yagince/eir/releases/latest"
           >
-            Download for Intel
+            Download for Intel Mac
+          </a>
+          <a
+            id="download-windows"
+            class="btn secondary"
+            href="https://github.com/yagince/eir/releases/latest"
+          >
+            Download for Windows
+          </a>
+          <a
+            id="download-linux"
+            class="btn secondary"
+            href="https://github.com/yagince/eir/releases/latest"
+          >
+            Download for Linux
           </a>
         </div>
         <p id="version-line" class="version">Latest release: loading…</p>
@@ -67,12 +81,15 @@
         <h2>Features</h2>
         <ul class="feature-grid">
           <li>
-            <h3>Menubar only</h3>
-            <p>No dock icon. Lives as a tray icon with a compact 380×520 popup.</p>
+            <h3>Tray only</h3>
+            <p>
+              No taskbar entry. Lives as a tray icon with a compact 380×520 popup (auto-expands
+              to fill screen height on macOS).
+            </p>
           </li>
           <li>
             <h3>GitHub OAuth device flow</h3>
-            <p>Sign in once — the token persists across restarts in a mode-0600 file.</p>
+            <p>Sign in once — the token persists across restarts in a per-user config file.</p>
           </li>
           <li>
             <h3>Grouped by repository</h3>
@@ -92,7 +109,10 @@
           </li>
           <li>
             <h3>Unread tracking</h3>
-            <p>Tray badge shows unread count. Clicking an item marks it read.</p>
+            <p>
+              macOS shows the count right on the menubar icon. Windows / Linux surface it
+              through the tray tooltip.
+            </p>
           </li>
           <li>
             <h3>Global shortcut</h3>
@@ -104,8 +124,8 @@
           <li>
             <h3>Light / dark aware</h3>
             <p>
-              Template-mode tray icon and <code>prefers-color-scheme</code> styling follow the
-              system.
+              Template-mode tray icon on macOS and <code>prefers-color-scheme</code> styling
+              everywhere.
             </p>
           </li>
           <li>
@@ -120,27 +140,61 @@
 
       <section class="install">
         <h2>Install</h2>
+
+        <h3>macOS</h3>
         <ol>
-          <li>
-            Download the <code>.dmg</code> for your architecture above — or grab it from the
-            <a href="https://github.com/yagince/eir/releases/latest" target="_blank" rel="noopener"
-              >Releases page</a
-            >.
-          </li>
+          <li>Download the <code>.dmg</code> for your architecture above.</li>
           <li>Open the DMG and drag <strong>eir.app</strong> into <code>/Applications</code>.</li>
           <li>
             Remove the quarantine attribute so Gatekeeper lets it launch (the bundle is ad-hoc
             signed — no Apple Developer ID yet):
             <pre><code id="xattr-cmd">xattr -rd com.apple.quarantine /Applications/eir.app</code><button class="copy-btn" data-copy-target="xattr-cmd" aria-label="Copy command">Copy</button></pre>
           </li>
-          <li>
-            Launch eir. Click the feather-and-eye icon in the menubar → sign in with GitHub device
-            flow. You're done.
-          </li>
+          <li>Launch eir and sign in with the GitHub device flow.</li>
         </ol>
         <p class="note">
           Subsequent launches — including after the in-app updater swaps the binary — don't need
           the <code>xattr</code> step again.
+        </p>
+
+        <h3>Windows</h3>
+        <ol>
+          <li>
+            Download <code>eir_&lt;version&gt;_x64-setup.exe</code> (or the <code>.msi</code>)
+            and run it.
+          </li>
+          <li>
+            On the SmartScreen <em>"Windows protected your PC"</em> dialog, click
+            <strong>More info → Run anyway</strong>. The build isn't code-signed with an
+            Authenticode certificate yet.
+          </li>
+          <li>Launch eir from the Start menu and sign in.</li>
+        </ol>
+        <p class="note">
+          Token is stored at <code>%APPDATA%\eir\token</code>. A system tray is required — all
+          stock Windows 10/11 installs have one.
+        </p>
+
+        <h3>Linux</h3>
+        <ol>
+          <li>
+            Download <code>eir_&lt;version&gt;_amd64.AppImage</code> and make it executable:
+            <pre><code id="linux-appimage-cmd">chmod +x eir_*_amd64.AppImage &amp;&amp; ./eir_*_amd64.AppImage</code><button class="copy-btn" data-copy-target="linux-appimage-cmd" aria-label="Copy command">Copy</button></pre>
+          </li>
+          <li>
+            Or install the <code>.deb</code> on Debian / Ubuntu derivatives:
+            <pre><code id="linux-deb-cmd">sudo apt install ./eir_*_amd64.deb</code><button class="copy-btn" data-copy-target="linux-deb-cmd" aria-label="Copy command">Copy</button></pre>
+          </li>
+        </ol>
+        <p class="note">
+          A system tray is required. On GNOME, install the
+          <a
+            href="https://extensions.gnome.org/extension/615/appindicator-support/"
+            target="_blank"
+            rel="noopener"
+            >AppIndicator Support</a
+          >
+          extension if you don't already have one.
         </p>
       </section>
 
