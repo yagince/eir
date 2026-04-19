@@ -39,8 +39,17 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "createUpdaterArtifacts": true,
     "macOS": {
       "signingIdentity": "-"
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/yagince/eir/releases/latest/download/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlBQzkxQkIyRTRBQkJCQjcKUldTM3U2dmtzaHZKbW1jRmllWUVNZkVRSmZLa2Vmc2I5K1BSWkNTQWR1QVljUk9odmI1dlA0UEkK"
     }
   }
 }
