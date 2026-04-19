@@ -6,6 +6,8 @@
     requestPermission,
     sendNotification,
   } from "@tauri-apps/plugin-notification";
+  import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
+  import { relaunch } from "@tauri-apps/plugin-process";
   import { onDestroy, onMount } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import {
@@ -64,6 +66,16 @@
   let capturingShortcut = $state(false);
   let shortcutError = $state<string | null>(null);
   let selectedId = $state<number | null>(null);
+
+  type UpdateStatus =
+    | { kind: "idle" }
+    | { kind: "checking" }
+    | { kind: "up-to-date" }
+    | { kind: "available"; version: string }
+    | { kind: "downloading" }
+    | { kind: "installed" }
+    | { kind: "error"; message: string };
+  let updateStatus = $state<UpdateStatus>({ kind: "idle" });
   const excludedRepos = new SvelteSet<string>(loadExcludedRepos());
   const hiddenItems = new SvelteSet<number>(loadHiddenItems());
   const watchedOrgs = new SvelteSet<string>(loadWatchedOrgs());
@@ -333,6 +345,37 @@
     }
   }
 
+  async function runUpdateCheck(opts: { interactive: boolean }) {
+    if (updateStatus.kind === "checking" || updateStatus.kind === "downloading")
+      return;
+    updateStatus = { kind: "checking" };
+    try {
+      const update = await checkForUpdate();
+      if (!update) {
+        updateStatus = { kind: "up-to-date" };
+        console.info("[eir] update check: already latest");
+        return;
+      }
+      console.info(
+        `[eir] update check: ${update.version} available (current ${update.currentVersion})`,
+      );
+      updateStatus = { kind: "available", version: update.version };
+      if (!opts.interactive) {
+        // Silent check on boot — just record availability, let the user
+        // click the Settings button when they're ready. No auto-install.
+        return;
+      }
+      updateStatus = { kind: "downloading" };
+      await update.downloadAndInstall();
+      updateStatus = { kind: "installed" };
+      await relaunch();
+    } catch (e) {
+      const message = String(e);
+      console.warn("[eir] update check failed:", message);
+      updateStatus = { kind: "error", message };
+    }
+  }
+
   async function sendTestNotification() {
     if (!(await ensureNotificationPermission())) {
       error =
@@ -366,6 +409,9 @@
     }
     window.addEventListener("keydown", handleGlobalKey);
     void loadItems({ silent: true });
+    // Silent update check on boot — if a new version is out, the Settings
+    // button will show "Update available" and the user can choose to install.
+    void runUpdateCheck({ interactive: false });
   });
 
   onDestroy(() => {
@@ -711,6 +757,41 @@
         <div class="setting-row">
           <span class="setting-label">Test notification</span>
           <button class="secondary" onclick={sendTestNotification}>Send</button>
+        </div>
+
+        <div class="setting-row">
+          <span class="setting-label">
+            Check for updates
+            {#if updateStatus.kind === "up-to-date"}
+              <span class="setting-hint-inline">— already latest</span>
+            {:else if updateStatus.kind === "available"}
+              <span class="setting-hint-inline update-available"
+                >— v{updateStatus.version} available</span
+              >
+            {:else if updateStatus.kind === "installed"}
+              <span class="setting-hint-inline">— installed, relaunching…</span>
+            {:else if updateStatus.kind === "error"}
+              <span class="setting-hint-inline error-inline"
+                >— {updateStatus.message}</span
+              >
+            {/if}
+          </span>
+          <button
+            class="secondary"
+            disabled={updateStatus.kind === "checking" ||
+              updateStatus.kind === "downloading"}
+            onclick={() => runUpdateCheck({ interactive: true })}
+          >
+            {#if updateStatus.kind === "checking"}
+              Checking…
+            {:else if updateStatus.kind === "downloading"}
+              Installing…
+            {:else if updateStatus.kind === "available"}
+              Install v{updateStatus.version}
+            {:else}
+              Check
+            {/if}
+          </button>
         </div>
         <div class="setting-row">
           <span class="setting-label">Toggle popup shortcut</span>
@@ -1121,6 +1202,21 @@
     background: rgba(9, 105, 218, 0.15);
     border-color: #0969da;
     color: #0969da;
+  }
+
+  .setting-hint-inline {
+    font-size: 11px;
+    color: rgba(27, 27, 31, 0.55);
+    margin-left: 4px;
+  }
+
+  .setting-hint-inline.update-available {
+    color: #1a7f37;
+    font-weight: 500;
+  }
+
+  .setting-hint-inline.error-inline {
+    color: #d1242f;
   }
 
   .setting-section {
@@ -1644,8 +1740,15 @@
     .signout,
     .group-header,
     .back,
-    .setting-hint {
+    .setting-hint,
+    .setting-hint-inline {
       color: rgba(236, 236, 239, 0.6);
+    }
+    .setting-hint-inline.update-available {
+      color: #3fb950;
+    }
+    .setting-hint-inline.error-inline {
+      color: #ff7b72;
     }
     .group-header {
       background: rgba(30, 30, 32, 0.98);

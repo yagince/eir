@@ -58,12 +58,19 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Ad-hoc signing only; adding an Apple Developer ID later will
-          # populate APPLE_CERTIFICATE / APPLE_SIGNING_IDENTITY and enable
-          # real signing + notarization without changing the workflow.
+          # Signs the updater artefacts (.app.tar.gz + latest.json) with
+          # the ed25519 keypair whose public half lives in tauri.conf.json.
+          # Without this secret, tauri-action skips updater signing and
+          # the in-app "Check for updates" flow won't verify the download.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Ad-hoc macOS codesign only; adding an Apple Developer ID later
+          # will populate APPLE_CERTIFICATE / APPLE_SIGNING_IDENTITY and
+          # enable real signing + notarization without changing the workflow.
         with:
           tagName: ${{ steps.tag.outputs.name }}
           releaseName: eir ${{ steps.tag.outputs.name }}
           releaseDraft: true
           prerelease: false
+          includeUpdaterJson: true
           args: --target ${{ matrix.target }}
