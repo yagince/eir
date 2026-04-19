@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>eir — a menubar watcher for GitHub PRs & Issues</title>
+    <meta
+      name="description"
+      content="eir is a macOS menubar app that watches GitHub PRs and Issues. A from-scratch alternative to Trailer / Neat, built with Tauri and SvelteKit."
+    />
+    <meta property="og:title" content="eir — menubar GitHub PR/Issue watcher" />
+    <meta
+      property="og:description"
+      content="A macOS menubar app that watches GitHub PRs and Issues. Built with Tauri v2 + SvelteKit."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="assets/screenshot.png" />
+    <link rel="icon" type="image/png" href="assets/icon-256.png" />
+    <link rel="apple-touch-icon" href="assets/icon-256.png" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main>
+      <header class="hero">
+        <img class="logo" src="assets/icon-256.png" alt="eir icon" width="128" height="128" />
+        <h1>eir</h1>
+        <p class="tagline">
+          A macOS menubar app that watches GitHub PRs and Issues.<br />
+          A from-scratch alternative to Trailer / Neat.
+        </p>
+
+        <div class="cta">
+          <a
+            id="download-arm64"
+            class="btn primary"
+            href="https://github.com/yagince/eir/releases/latest"
+          >
+            Download for Apple Silicon
+          </a>
+          <a
+            id="download-intel"
+            class="btn secondary"
+            href="https://github.com/yagince/eir/releases/latest"
+          >
+            Download for Intel
+          </a>
+        </div>
+        <p id="version-line" class="version">Latest release: loading…</p>
+
+        <p class="source-link">
+          <a href="https://github.com/yagince/eir" target="_blank" rel="noopener">
+            View source on GitHub →
+          </a>
+        </p>
+      </header>
+
+      <section class="screenshot">
+        <img
+          src="assets/screenshot.png"
+          alt="Screenshot of eir showing grouped PRs and Issues in the menubar popup"
+          width="641"
+          height="860"
+        />
+      </section>
+
+      <section class="features">
+        <h2>Features</h2>
+        <ul class="feature-grid">
+          <li>
+            <h3>Menubar only</h3>
+            <p>No dock icon. Lives as a tray icon with a compact 380×520 popup.</p>
+          </li>
+          <li>
+            <h3>GitHub OAuth device flow</h3>
+            <p>Sign in once — the token persists across restarts in a mode-0600 file.</p>
+          </li>
+          <li>
+            <h3>Grouped by repository</h3>
+            <p>PRs and Issues grouped by repo with sticky headers and per-repo unread counts.</p>
+          </li>
+          <li>
+            <h3>Filter tabs</h3>
+            <p>All / Mine / Review Requests / Mentions / Hidden, powered by GitHub search.</p>
+          </li>
+          <li>
+            <h3>Auto-refresh</h3>
+            <p>Silent background polling, 30s–5min interval, fully configurable.</p>
+          </li>
+          <li>
+            <h3>Native notifications</h3>
+            <p>Desktop notifications fire when a new PR or Issue first appears.</p>
+          </li>
+          <li>
+            <h3>Unread tracking</h3>
+            <p>Tray badge shows unread count. Clicking an item marks it read.</p>
+          </li>
+          <li>
+            <h3>Global shortcut</h3>
+            <p>
+              <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd> toggles the popup from anywhere.
+              Rebindable from Settings.
+            </p>
+          </li>
+          <li>
+            <h3>Light / dark aware</h3>
+            <p>
+              Template-mode tray icon and <code>prefers-color-scheme</code> styling follow the
+              system.
+            </p>
+          </li>
+          <li>
+            <h3>Auto-update</h3>
+            <p>
+              In-app updater verifies ed25519 signatures and relaunches into the new version —
+              no reinstall needed.
+            </p>
+          </li>
+        </ul>
+      </section>
+
+      <section class="install">
+        <h2>Install</h2>
+        <ol>
+          <li>
+            Download the <code>.dmg</code> for your architecture above — or grab it from the
+            <a href="https://github.com/yagince/eir/releases/latest" target="_blank" rel="noopener"
+              >Releases page</a
+            >.
+          </li>
+          <li>Open the DMG and drag <strong>eir.app</strong> into <code>/Applications</code>.</li>
+          <li>
+            Remove the quarantine attribute so Gatekeeper lets it launch (the bundle is ad-hoc
+            signed — no Apple Developer ID yet):
+            <pre><code id="xattr-cmd">xattr -rd com.apple.quarantine /Applications/eir.app</code><button class="copy-btn" data-copy-target="xattr-cmd" aria-label="Copy command">Copy</button></pre>
+          </li>
+          <li>
+            Launch eir. Click the feather-and-eye icon in the menubar → sign in with GitHub device
+            flow. You're done.
+          </li>
+        </ol>
+        <p class="note">
+          Subsequent launches — including after the in-app updater swaps the binary — don't need
+          the <code>xattr</code> step again.
+        </p>
+      </section>
+
+      <footer>
+        <p>
+          Built with <a href="https://tauri.app" target="_blank" rel="noopener">Tauri v2</a> and
+          <a href="https://kit.svelte.dev" target="_blank" rel="noopener">SvelteKit</a>. MIT
+          licensed.
+        </p>
+        <p>
+          <a href="https://github.com/yagince/eir" target="_blank" rel="noopener">GitHub</a> ·
+          <a href="https://github.com/yagince/eir/releases" target="_blank" rel="noopener"
+            >Releases</a
+          >
+          ·
+          <a href="https://github.com/yagince/eir/issues" target="_blank" rel="noopener">Issues</a>
+        </p>
+      </footer>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>
