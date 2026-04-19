@@ -32,14 +32,22 @@
   type Phase = "idle" | "pending" | "loaded";
   type Tab = "all" | "authored" | "review" | "mentions";
 
-  const REFRESH_MS = 60_000;
+  const DEFAULT_REFRESH_MS = 60_000;
   const SEEN_KEY = "eir.seen";
   const TAB_KEY = "eir.tab";
+  const INTERVAL_KEY = "eir.refreshMs";
+  const NOTIFY_KEY = "eir.notifyEnabled";
   const TABS: { id: Tab; label: string }[] = [
     { id: "all", label: "All" },
     { id: "authored", label: "Mine" },
     { id: "review", label: "Review" },
     { id: "mentions", label: "Mentions" },
+  ];
+  const REFRESH_OPTIONS: { value: number; label: string }[] = [
+    { value: 30_000, label: "30 seconds" },
+    { value: 60_000, label: "1 minute" },
+    { value: 120_000, label: "2 minutes" },
+    { value: 300_000, label: "5 minutes" },
   ];
 
   let phase = $state<Phase>("idle");
@@ -49,6 +57,9 @@
   let error = $state<string | null>(null);
   let copied = $state(false);
   let activeTab = $state<Tab>(loadTabFromStorage());
+  let showingSettings = $state(false);
+  let refreshMs = $state<number>(loadIntervalFromStorage());
+  let notifyEnabled = $state<boolean>(loadNotifyFromStorage());
 
   const seen = new SvelteSet<number>(loadSeenFromStorage());
   let prevIds = new Set<number>();
@@ -59,6 +70,16 @@
     const raw = localStorage.getItem(TAB_KEY);
     if (raw === "authored" || raw === "review" || raw === "mentions") return raw;
     return "all";
+  }
+
+  function loadIntervalFromStorage(): number {
+    const raw = localStorage.getItem(INTERVAL_KEY);
+    const n = raw ? Number(raw) : NaN;
+    return Number.isFinite(n) && n >= 5_000 ? n : DEFAULT_REFRESH_MS;
+  }
+
+  function loadNotifyFromStorage(): boolean {
+    return localStorage.getItem(NOTIFY_KEY) !== "0";
   }
 
   function loadSeenFromStorage(): number[] {
@@ -83,7 +104,13 @@
     if (refreshTimer) return;
     refreshTimer = setInterval(() => {
       void loadItems({ silent: true });
-    }, REFRESH_MS);
+    }, refreshMs);
+  }
+
+  function restartRefreshIfRunning() {
+    if (!refreshTimer) return;
+    stopRefresh();
+    startRefresh();
   }
 
   function stopRefresh() {
@@ -128,6 +155,7 @@
   }
 
   async function notify(newItems: WatchedItem[]) {
+    if (!notifyEnabled) return;
     if (!(await ensureNotificationPermission())) return;
     for (const item of newItems) {
       const kind = item.kind === "pr" ? "PR" : "Issue";
@@ -208,6 +236,17 @@
     void openUrl(item.url);
   }
 
+  function onIntervalChange(value: number) {
+    refreshMs = value;
+    localStorage.setItem(INTERVAL_KEY, String(value));
+    restartRefreshIfRunning();
+  }
+
+  function onNotifyChange(enabled: boolean) {
+    notifyEnabled = enabled;
+    localStorage.setItem(NOTIFY_KEY, enabled ? "1" : "0");
+  }
+
   async function switchTab(tab: Tab) {
     if (tab === activeTab) return;
     activeTab = tab;
@@ -267,7 +306,39 @@
     <p class="subtitle">GitHub PR / Issue watcher</p>
   </header>
 
-  {#if phase === "idle"}
+  {#if showingSettings}
+    <section class="settings">
+      <div class="settings-header">
+        <button class="back" onclick={() => (showingSettings = false)}>
+          ← Back
+        </button>
+      </div>
+      <div class="settings-body">
+        <label class="setting-row">
+          <span class="setting-label">Refresh interval</span>
+          <select
+            value={refreshMs}
+            onchange={(e) => onIntervalChange(Number(e.currentTarget.value))}
+          >
+            {#each REFRESH_OPTIONS as opt (opt.value)}
+              <option value={opt.value}>{opt.label}</option>
+            {/each}
+          </select>
+        </label>
+        <label class="setting-row">
+          <span class="setting-label">Desktop notifications</span>
+          <input
+            type="checkbox"
+            checked={notifyEnabled}
+            onchange={(e) => onNotifyChange(e.currentTarget.checked)}
+          />
+        </label>
+        <p class="setting-hint">
+          Toggle popup: <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd>
+        </p>
+      </div>
+    </section>
+  {:else if phase === "idle"}
     <section class="auth">
       <p class="hint">Sign in to start tracking your PRs and Issues.</p>
       <button class="primary" onclick={signIn}>Sign in with GitHub</button>
@@ -350,6 +421,14 @@
       <button class="refresh" onclick={() => loadItems()} disabled={loading}>
         {loading ? "Refreshing…" : "Refresh"}
       </button>
+      <button
+        class="icon-btn"
+        onclick={() => (showingSettings = true)}
+        title="Settings"
+        aria-label="Settings"
+      >
+        ⚙
+      </button>
       <button class="signout" onclick={signOut}>Sign out</button>
     </footer>
   {/if}
@@ -404,6 +483,93 @@
     align-items: center;
     text-align: center;
     gap: 12px;
+  }
+
+  .settings {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .settings-header {
+    margin-bottom: 12px;
+  }
+
+  .back {
+    background: none;
+    border: none;
+    padding: 4px 0;
+    font-size: 12px;
+    color: rgba(27, 27, 31, 0.6);
+    cursor: pointer;
+  }
+
+  .back:hover {
+    color: #0969da;
+  }
+
+  .settings-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .setting-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 13px;
+    gap: 12px;
+  }
+
+  .setting-label {
+    color: inherit;
+  }
+
+  .setting-row select {
+    font-size: 13px;
+    padding: 4px 6px;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    border-radius: 5px;
+    background: white;
+    color: inherit;
+  }
+
+  .setting-row input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: #0969da;
+  }
+
+  .setting-hint {
+    margin: 8px 0 0;
+    font-size: 11px;
+    color: rgba(27, 27, 31, 0.55);
+  }
+
+  .setting-hint kbd {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 10px;
+    padding: 1px 4px;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.04);
+  }
+
+  .icon-btn {
+    padding: 0 10px;
+    font-size: 16px;
+    border: none;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.05);
+    color: inherit;
+    cursor: pointer;
+    line-height: 1;
+  }
+
+  .icon-btn:hover {
+    background: rgba(0, 0, 0, 0.1);
   }
 
   .hint {
@@ -688,7 +854,9 @@
     .hint,
     .waiting,
     .signout,
-    .group-header {
+    .group-header,
+    .back,
+    .setting-hint {
       color: rgba(236, 236, 239, 0.6);
     }
     .group-header {
@@ -706,6 +874,20 @@
     }
     .item:hover {
       background: rgba(255, 255, 255, 0.06);
+    }
+    .setting-row select {
+      background: rgba(255, 255, 255, 0.05);
+      border-color: rgba(255, 255, 255, 0.15);
+    }
+    .setting-hint kbd {
+      background: rgba(255, 255, 255, 0.06);
+      border-color: rgba(255, 255, 255, 0.15);
+    }
+    .icon-btn {
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .icon-btn:hover {
+      background: rgba(255, 255, 255, 0.14);
     }
   }
 </style>
