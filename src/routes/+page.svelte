@@ -455,6 +455,14 @@
     unreadCount: number;
   };
 
+  const repoSuggestions = $derived.by<string[]>(() => {
+    const seen = new Set<string>();
+    for (const item of items) {
+      if (!excludedRepos.has(item.repo)) seen.add(item.repo);
+    }
+    return [...seen].sort();
+  });
+
   const visibleItems = $derived.by<WatchedItem[]>(() => {
     if (activeTab === "hidden") {
       return items.filter((i) => hiddenItems.has(i.id));
@@ -563,10 +571,16 @@
           <div class="excluded-add">
             <input
               type="text"
+              list="repo-suggestions"
               placeholder="owner/repo"
               bind:value={newExcludedRepo}
               onkeydown={(e) => e.key === "Enter" && addExcludedRepo()}
             />
+            <datalist id="repo-suggestions">
+              {#each repoSuggestions as repo (repo)}
+                <option value={repo}></option>
+              {/each}
+            </datalist>
             <button class="secondary" onclick={addExcludedRepo}>Add</button>
           </div>
         </div>
@@ -1130,9 +1144,16 @@
     border: none;
     border-radius: 6px;
     font-size: 14px;
-    color: rgba(27, 27, 31, 0.25);
+    color: rgba(27, 27, 31, 0.5);
     cursor: pointer;
-    transition: color 100ms, background 100ms;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms;
+  }
+
+  .item-row:hover .row-action {
+    opacity: 1;
+    pointer-events: auto;
   }
 
   .row-action:hover {
