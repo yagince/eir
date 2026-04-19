@@ -9,6 +9,7 @@
   import { onDestroy, onMount } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import {
+    computeItemChanges,
     filterVisible,
     groupByRepo,
     itemKey,
@@ -70,6 +71,7 @@
   let newWatchedOrg = $state("");
 
   let prevThreads = new Map<number, string>();
+  let prevItems = new Map<number, WatchedItem>();
   let hasLoadedOnce = false;
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -207,21 +209,41 @@
         const fresh = fetchedNotifs.filter(
           (n) => prevThreads.get(n.thread_id) !== n.updated_at,
         );
+
+        // Item-level diff: catches changes GitHub doesn't generate a
+        // notification thread for (another reviewer approved, CI status
+        // flipped, PR merged upstream, etc.). Anything already covered by
+        // the /notifications fresh set is dropped to avoid double-firing.
+        const notifiedKeys = new Set(
+          fresh
+            .filter((n) => n.number != null)
+            .map((n) => `${n.repo}:${n.kind}:${n.number}`),
+        );
+        const itemChanges = computeItemChanges(
+          prevItems,
+          fetchedItems,
+          notifiedKeys,
+        );
+
         console.info(
-          `[eir] refresh: ${fetchedNotifs.length} unread notifications, ${fresh.length} new or updated since last fetch`,
+          `[eir] refresh: ${fetchedNotifs.length} unread notifications (${fresh.length} new), ${itemChanges.length} item-level changes`,
         );
         if (fresh.length > 0) {
           await notify(fresh);
         }
+        if (itemChanges.length > 0) {
+          await notifyItemChanges(itemChanges);
+        }
       } else {
         console.info(
-          `[eir] initial load: ${fetchedNotifs.length} unread notifications (suppressed)`,
+          `[eir] initial load: ${fetchedNotifs.length} unread notifications, ${fetchedItems.length} items (notifications suppressed)`,
         );
       }
 
       items = fetchedItems;
       notifications = fetchedNotifs;
       prevThreads = nextThreads;
+      prevItems = new Map(fetchedItems.map((i) => [i.id, i]));
       hasLoadedOnce = true;
       phase = "loaded";
       updateBadge();
@@ -243,6 +265,7 @@
     items = [];
     notifications = [];
     prevThreads = new Map();
+    prevItems = new Map();
     hasLoadedOnce = false;
     phase = "idle";
     void invoke("set_tray_badge", { count: 0 });
@@ -268,6 +291,22 @@
         return "CI update";
       default:
         return "New activity";
+    }
+  }
+
+  async function notifyItemChanges(
+    changes: { item: WatchedItem; reason: string }[],
+  ) {
+    if (!notifyEnabled) return;
+    if (!(await ensureNotificationPermission())) return;
+    for (const { item, reason } of changes) {
+      console.info(
+        `[eir] sending item-change notification: ${reason} — ${item.repo}#${item.number}`,
+      );
+      sendNotification({
+        title: reason,
+        body: `${item.repo}#${item.number} — ${item.title}`,
+      });
     }
   }
 

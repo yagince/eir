@@ -467,6 +467,15 @@ pub async fn fetch_watched(
 
     // Walk alias results in a stable order (s0, s1, ...) so the primary
     // `involves:@me` query always gets first crack at each id.
+    let items = merge_search_results(data);
+    Ok(items)
+}
+
+/// Collapse the alias-keyed map returned by GraphQL search (s0, s1, …) into
+/// a single deduplicated, updated_at-desc-sorted list of items. Walking the
+/// aliases in name order gives the primary `involves:@me` query (s0) first
+/// dibs on each id, so the later watched-org queries don't clobber it.
+fn merge_search_results(data: std::collections::HashMap<String, SearchResult>) -> Vec<WatchedItem> {
     let mut ordered: Vec<(String, SearchResult)> = data.into_iter().collect();
     ordered.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -487,11 +496,8 @@ pub async fn fetch_watched(
         }
     }
 
-    // GraphQL search has no server-side sort for ISSUE type; order by
-    // updated_at descending so the UI mirrors the previous REST behaviour.
     items.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-
-    Ok(items)
+    items
 }
 
 // ---------------------------------------------------------------------------
@@ -913,6 +919,159 @@ mod tests {
         // Fragments are defined once and referenced from aliases
         assert!(q.contains("fragment PrFields on PullRequest"));
         assert!(q.contains("...PrFields"));
+    }
+
+    fn make_issue_node(database_id: u64, repo: &str, number: u64) -> IssueNode {
+        serde_json::from_value(json!({
+            "databaseId": database_id,
+            "title": "issue title",
+            "number": number,
+            "url": format!("https://github.com/{repo}/issues/{number}"),
+            "updatedAt": "2026-01-01T00:00:00Z",
+            "state": "OPEN",
+            "comments": { "totalCount": 0 },
+            "repository": { "nameWithOwner": repo },
+            "author": { "login": "someone", "avatarUrl": "a" }
+        }))
+        .unwrap()
+    }
+
+    fn make_pr_node(database_id: u64, repo: &str, number: u64, updated_at: &str) -> PrNode {
+        serde_json::from_value(json!({
+            "databaseId": database_id,
+            "title": "pr title",
+            "number": number,
+            "url": format!("https://github.com/{repo}/pull/{number}"),
+            "updatedAt": updated_at,
+            "state": "OPEN",
+            "comments": { "totalCount": 0 },
+            "repository": { "nameWithOwner": repo },
+            "author": { "login": "someone", "avatarUrl": "a" },
+            "reviews": { "nodes": [] },
+            "reviewRequests": { "nodes": [] },
+            "commits": { "nodes": [] }
+        }))
+        .unwrap()
+    }
+
+    fn search_result(nodes: Vec<SearchNode>) -> SearchResult {
+        SearchResult {
+            nodes: nodes.into_iter().map(Some).collect(),
+        }
+    }
+
+    #[test]
+    fn issue_to_item_copies_scalar_fields() {
+        let item = issue_to_item(make_issue_node(10, "o/r", 7));
+        assert_eq!(item.id, 10);
+        assert_eq!(item.kind, "issue");
+        assert_eq!(item.number, 7);
+        assert_eq!(item.repo, "o/r");
+        assert_eq!(item.state, "open");
+        assert!(!item.is_draft);
+        assert!(item.reviewers.is_empty());
+        assert!(item.ci_status.is_none());
+    }
+
+    #[test]
+    fn merge_search_results_sorts_by_updated_at_desc() {
+        let mut data = std::collections::HashMap::new();
+        data.insert(
+            "s0".to_string(),
+            search_result(vec![
+                SearchNode::PullRequest(make_pr_node(1, "o/r", 1, "2026-03-01T00:00:00Z")),
+                SearchNode::PullRequest(make_pr_node(2, "o/r", 2, "2026-04-01T00:00:00Z")),
+            ]),
+        );
+        let out = merge_search_results(data);
+        // Newer first
+        assert_eq!(out[0].id, 2);
+        assert_eq!(out[1].id, 1);
+    }
+
+    #[test]
+    fn merge_search_results_dedups_by_id_across_aliases() {
+        let mut data = std::collections::HashMap::new();
+        // The same PR appears in both queries (e.g. a user's own PR is in
+        // involves:@me and user:@me). Later alias must not clobber the one
+        // from the primary query.
+        data.insert(
+            "s0".to_string(),
+            search_result(vec![SearchNode::PullRequest(make_pr_node(
+                1,
+                "o/r",
+                1,
+                "2026-04-01T00:00:00Z",
+            ))]),
+        );
+        data.insert(
+            "s1".to_string(),
+            search_result(vec![SearchNode::PullRequest(make_pr_node(
+                1,
+                "o/r",
+                1,
+                "2026-04-01T00:00:00Z",
+            ))]),
+        );
+        let out = merge_search_results(data);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, 1);
+    }
+
+    #[test]
+    fn merge_search_results_mixes_prs_and_issues() {
+        let mut data = std::collections::HashMap::new();
+        data.insert(
+            "s0".to_string(),
+            search_result(vec![
+                SearchNode::PullRequest(make_pr_node(1, "o/r", 1, "2026-04-02T00:00:00Z")),
+                SearchNode::Issue(make_issue_node(2, "o/r", 2)),
+            ]),
+        );
+        let out = merge_search_results(data);
+        assert_eq!(out.len(), 2);
+        let kinds: Vec<_> = out.iter().map(|i| i.kind).collect();
+        assert!(kinds.contains(&"pr"));
+        assert!(kinds.contains(&"issue"));
+    }
+
+    #[test]
+    fn merge_search_results_skips_unknown_nodes() {
+        let mut data = std::collections::HashMap::new();
+        data.insert(
+            "s0".to_string(),
+            search_result(vec![
+                SearchNode::Unknown,
+                SearchNode::PullRequest(make_pr_node(1, "o/r", 1, "2026-04-01T00:00:00Z")),
+                SearchNode::Unknown,
+            ]),
+        );
+        let out = merge_search_results(data);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, 1);
+    }
+
+    #[test]
+    fn merge_search_results_drops_none_slots_in_nodes() {
+        // A search page can contain explicit null entries in GraphQL; Option<SearchNode>
+        // lets serde deserialize those as None and merge should ignore them.
+        let data = std::collections::HashMap::from([(
+            "s0".to_string(),
+            SearchResult {
+                nodes: vec![
+                    None,
+                    Some(SearchNode::PullRequest(make_pr_node(
+                        1,
+                        "o/r",
+                        1,
+                        "2026-04-01T00:00:00Z",
+                    ))),
+                    None,
+                ],
+            },
+        )]);
+        let out = merge_search_results(data);
+        assert_eq!(out.len(), 1);
     }
 
     #[test]
