@@ -6,7 +6,7 @@
     isPermissionGranted,
     requestPermission,
   } from "@tauri-apps/plugin-notification";
-  import { check as checkForUpdate } from "@tauri-apps/plugin-updater";
+  import { check as checkForUpdate, Update } from "@tauri-apps/plugin-updater";
   import { relaunch } from "@tauri-apps/plugin-process";
   import { ask, message } from "@tauri-apps/plugin-dialog";
   import {
@@ -93,14 +93,12 @@
     | { kind: "idle" }
     | { kind: "checking" }
     | { kind: "up-to-date" }
-    | { kind: "available"; version: string }
+    | { kind: "available"; update: Update }
     | { kind: "downloading" }
     | { kind: "installed" }
     | { kind: "error"; message: string };
   let updateStatus = $state<UpdateStatus>({ kind: "idle" });
   let appVersion = $state<string>("");
-  type PendingUpdate = NonNullable<Awaited<ReturnType<typeof checkForUpdate>>>;
-  let pendingUpdate: PendingUpdate | null = null;
   let autostartEnabled = $state<boolean | null>(null);
   const excludedRepos = new SvelteSet<string>(loadExcludedRepos());
   const hiddenItems = new SvelteSet<number>(loadHiddenItems());
@@ -407,7 +405,6 @@
     try {
       const update = await checkForUpdate();
       if (!update) {
-        pendingUpdate = null;
         updateStatus = { kind: "up-to-date" };
         console.info("[eir] update check: already latest");
         if (opts.interactive) {
@@ -423,21 +420,13 @@
       console.info(
         `[eir] update check: ${update.version} available (current ${update.currentVersion})`,
       );
-      pendingUpdate = update;
-      updateStatus = { kind: "available", version: update.version };
+      updateStatus = { kind: "available", update };
       if (!opts.interactive && notifyEnabled) {
-        // Silent check on boot — let the user know via a desktop notification
-        // that a new version is ready. They decide whether to install from
-        // Settings; we never auto-install.
-        try {
-          if (await ensureNotificationPermission()) {
-            showNotification(
-              "eir update available",
-              `Version ${update.version} is ready. Open Settings to install.`,
-            );
-          }
-        } catch {
-          // ignore
+        if (await ensureNotificationPermission()) {
+          showNotification(
+            "eir update available",
+            `Version ${update.version} is ready. Open Settings to install.`,
+          );
         }
       }
     } catch (e) {
@@ -448,16 +437,15 @@
   }
 
   async function installPendingUpdate() {
-    if (!pendingUpdate) return;
-    if (updateStatus.kind === "downloading") return;
+    if (updateStatus.kind !== "available") return;
+    const update = updateStatus.update;
     const ok = await withPinnedWindow(() =>
       ask(
-        `Install eir v${pendingUpdate!.version}?\n\nThe app will relaunch after the update is installed.`,
+        `Install eir v${update.version}?\n\nThe app will relaunch after the update is installed.`,
         { title: "Update available", kind: "info", okLabel: "Install" },
       ),
     );
     if (!ok) return;
-    const update = pendingUpdate;
     updateStatus = { kind: "downloading" };
     try {
       await update.downloadAndInstall();
@@ -488,37 +476,27 @@
   }
 
   onMount(async () => {
-    // Kick the permission dialog early so the first real notification isn't
-    // also the first time the OS is asked — which silently denies in some
-    // cases on macOS dev builds.
-    try {
-      await ensureNotificationPermission();
-    } catch {
-      // ignore
-    }
-    try {
-      toggleShortcut = await invoke<string>("get_toggle_shortcut");
-    } catch {
-      // keep default
-    }
-    try {
-      appVersion = await getVersion();
-    } catch {
-      // leave empty
-    }
     window.addEventListener("keydown", handleGlobalKey);
     void loadItems({ silent: true });
     // Silent update check on boot — if a new version is out, the Settings
     // button will show "Update available" and the user can choose to install.
     void runUpdateCheck({ interactive: false });
-    // Sync the autostart toggle with the actual system state. The plugin
-    // reads the LaunchAgent plist, so this catches changes made outside
-    // the app (e.g. the user disabled "Login Items" in System Settings).
-    try {
-      autostartEnabled = await isAutostartEnabled();
-    } catch {
-      autostartEnabled = false;
-    }
+
+    // Kick the permission dialog early so the first real notification isn't
+    // also the first time the OS is asked — which silently denies in some
+    // cases on macOS dev builds.
+    const [, shortcut, version, autostart] = await Promise.all([
+      ensureNotificationPermission().catch(() => false),
+      invoke<string>("get_toggle_shortcut").catch(() => null),
+      getVersion().catch(() => ""),
+      // Sync the autostart toggle with the actual system state — the plugin
+      // reads the LaunchAgent plist, so this catches changes made outside
+      // the app (e.g. the user disabled "Login Items" in System Settings).
+      isAutostartEnabled().catch(() => false),
+    ]);
+    if (shortcut) toggleShortcut = shortcut;
+    appVersion = version;
+    autostartEnabled = autostart;
   });
 
   onDestroy(() => {
@@ -885,7 +863,7 @@
               <span class="setting-hint-inline">· already latest</span>
             {:else if updateStatus.kind === "available"}
               <span class="setting-hint-inline update-available"
-                >· v{updateStatus.version} available</span
+                >· v{updateStatus.update.version} available</span
               >
             {:else if updateStatus.kind === "installed"}
               <span class="setting-hint-inline">· installed, relaunching…</span>
@@ -909,7 +887,7 @@
             {:else if updateStatus.kind === "downloading"}
               Installing…
             {:else if updateStatus.kind === "available"}
-              Install v{updateStatus.version}
+              Install v{updateStatus.update.version}
             {:else}
               Check
             {/if}
