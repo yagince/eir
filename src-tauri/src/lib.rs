@@ -10,6 +10,11 @@ use crate::auth::AppState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // reqwest and other deps both pull in rustls with different crypto providers
+    // (aws-lc-rs and ring). Picking one explicitly avoids the runtime panic when
+    // rustls can't auto-select.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
