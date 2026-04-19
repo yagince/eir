@@ -57,84 +57,112 @@ pub struct WatchedItem {
     ci_status: Option<&'static str>, // "success" | "pending" | "failure" | "error"
 }
 
-fn query_for_tab(tab: &str) -> &'static str {
+fn queries_for_tab(tab: &str, watched_orgs: &[String]) -> Vec<String> {
     match tab {
-        "authored" => "is:open is:pr author:@me archived:false",
-        "review" => "is:open is:pr review-requested:@me archived:false",
-        "mentions" => "is:open mentions:@me archived:false",
-        _ => "is:open involves:@me archived:false",
+        "authored" => vec!["is:open is:pr author:@me archived:false".into()],
+        "review" => vec!["is:open is:pr review-requested:@me archived:false".into()],
+        "mentions" => vec!["is:open mentions:@me archived:false".into()],
+        _ => {
+            let mut qs = vec![
+                "is:open involves:@me archived:false".into(),
+                "is:open is:pr user:@me archived:false".into(),
+            ];
+            for org in watched_orgs {
+                // Allow-list characters to avoid breaking out of the
+                // qualifier. GitHub logins are [A-Za-z0-9-] only.
+                let clean: String = org
+                    .chars()
+                    .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                    .collect();
+                if clean.is_empty() {
+                    continue;
+                }
+                qs.push(format!("is:open is:pr user:{clean} archived:false"));
+            }
+            qs
+        }
     }
 }
 
-const SEARCH_QUERY: &str = r#"
-query($q: String!) {
-  search(query: $q, type: ISSUE, first: 50) {
+const SEARCH_FRAGMENTS: &str = r#"
+fragment PrFields on PullRequest {
+  databaseId
+  title
+  number
+  url
+  updatedAt
+  state
+  isDraft
+  comments { totalCount }
+  repository { nameWithOwner }
+  author {
+    login
+    ... on User { avatarUrl }
+    ... on Bot { avatarUrl }
+  }
+  reviews(last: 30) {
     nodes {
-      __typename
-      ... on PullRequest {
-        databaseId
-        title
-        number
-        url
-        updatedAt
-        state
-        isDraft
-        comments { totalCount }
-        repository { nameWithOwner }
-        author {
-          login
-          ... on User { avatarUrl }
-          ... on Bot { avatarUrl }
-        }
-        reviews(last: 30) {
-          nodes {
-            state
-            author {
-              login
-              ... on User { avatarUrl }
-              ... on Bot { avatarUrl }
-            }
-          }
-        }
-        reviewRequests(first: 10) {
-          nodes {
-            requestedReviewer {
-              __typename
-              ... on User { login avatarUrl }
-            }
-          }
-        }
-        commits(last: 1) {
-          nodes {
-            commit {
-              statusCheckRollup { state }
-            }
-          }
-        }
+      state
+      author {
+        login
+        ... on User { avatarUrl }
+        ... on Bot { avatarUrl }
       }
-      ... on Issue {
-        databaseId
-        title
-        number
-        url
-        updatedAt
-        state
-        comments { totalCount }
-        repository { nameWithOwner }
-        author {
-          login
-          ... on User { avatarUrl }
-          ... on Bot { avatarUrl }
-        }
+    }
+  }
+  reviewRequests(first: 10) {
+    nodes {
+      requestedReviewer {
+        __typename
+        ... on User { login avatarUrl }
+      }
+    }
+  }
+  commits(last: 1) {
+    nodes {
+      commit {
+        statusCheckRollup { state }
       }
     }
   }
 }
+
+fragment IssueFields on Issue {
+  databaseId
+  title
+  number
+  url
+  updatedAt
+  state
+  comments { totalCount }
+  repository { nameWithOwner }
+  author {
+    login
+    ... on User { avatarUrl }
+    ... on Bot { avatarUrl }
+  }
+}
 "#;
+
+fn build_search_query(n: usize) -> String {
+    let mut vars = Vec::with_capacity(n);
+    let mut aliases = Vec::with_capacity(n);
+    for i in 0..n {
+        vars.push(format!("$q{i}: String!"));
+        aliases.push(format!(
+            "  s{i}: search(query: $q{i}, type: ISSUE, first: 50) {{\n    nodes {{\n      __typename\n      ... on PullRequest {{ ...PrFields }}\n      ... on Issue {{ ...IssueFields }}\n    }}\n  }}"
+        ));
+    }
+    format!(
+        "{SEARCH_FRAGMENTS}\nquery Search({vars}) {{\n{aliases}\n}}",
+        vars = vars.join(", "),
+        aliases = aliases.join("\n"),
+    )
+}
 
 #[derive(Deserialize)]
 struct GqlResp {
-    data: Option<SearchData>,
+    data: Option<std::collections::HashMap<String, SearchResult>>,
     #[serde(default)]
     errors: Vec<GqlError>,
 }
@@ -142,11 +170,6 @@ struct GqlResp {
 #[derive(Deserialize)]
 struct GqlError {
     message: String,
-}
-
-#[derive(Deserialize)]
-struct SearchData {
-    search: SearchResult,
 }
 
 #[derive(Deserialize)]
@@ -399,13 +422,23 @@ fn issue_to_item(issue: IssueNode) -> WatchedItem {
 #[tauri::command]
 pub async fn fetch_watched(
     tab: String,
+    watched_orgs: Option<Vec<String>>,
     auth: State<'_, Mutex<AppState>>,
 ) -> Result<Vec<WatchedItem>, String> {
     let octo = build_octo(&auth)?;
 
+    let orgs = watched_orgs.unwrap_or_default();
+    let queries = queries_for_tab(&tab, &orgs);
+    let query_str = build_search_query(queries.len());
+    let variables: serde_json::Map<String, serde_json::Value> = queries
+        .iter()
+        .enumerate()
+        .map(|(i, q)| (format!("q{i}"), serde_json::Value::String(q.clone())))
+        .collect();
+
     let body = serde_json::json!({
-        "query": SEARCH_QUERY,
-        "variables": { "q": query_for_tab(&tab) },
+        "query": query_str,
+        "variables": variables,
     });
 
     let resp: GqlResp = match octo.graphql(&body).await {
@@ -432,17 +465,27 @@ pub async fn fetch_watched(
         return Err("graphql returned no data".into());
     };
 
-    let mut items: Vec<WatchedItem> = data
-        .search
-        .nodes
-        .into_iter()
-        .flatten()
-        .filter_map(|node| match node {
-            SearchNode::PullRequest(pr) => Some(pr_to_item(pr)),
-            SearchNode::Issue(i) => Some(issue_to_item(i)),
-            SearchNode::Unknown => None,
-        })
-        .collect();
+    // Walk alias results in a stable order (s0, s1, ...) so the primary
+    // `involves:@me` query always gets first crack at each id.
+    let mut ordered: Vec<(String, SearchResult)> = data.into_iter().collect();
+    ordered.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut seen = std::collections::HashSet::new();
+    let mut items: Vec<WatchedItem> = Vec::new();
+    for (_, result) in ordered {
+        for node in result.nodes.into_iter().flatten() {
+            let item = match node {
+                SearchNode::PullRequest(pr) => Some(pr_to_item(pr)),
+                SearchNode::Issue(i) => Some(issue_to_item(i)),
+                SearchNode::Unknown => None,
+            };
+            if let Some(item) = item {
+                if seen.insert(item.id) {
+                    items.push(item);
+                }
+            }
+        }
+    }
 
     // GraphQL search has no server-side sort for ISSUE type; order by
     // updated_at descending so the UI mirrors the previous REST behaviour.
@@ -821,6 +864,55 @@ mod tests {
         assert_eq!(item.state, "open");
         assert_eq!(item.author, "author");
         assert!(!item.is_draft);
+    }
+
+    #[test]
+    fn queries_for_tab_all_includes_involves_and_user_self() {
+        let qs = queries_for_tab("all", &[]);
+        assert_eq!(qs.len(), 2);
+        assert!(qs[0].contains("involves:@me"));
+        assert!(qs[1].contains("user:@me"));
+    }
+
+    #[test]
+    fn queries_for_tab_all_expands_watched_orgs() {
+        let qs = queries_for_tab("all", &["Lecto-inc".to_string(), "other".to_string()]);
+        assert_eq!(qs.len(), 4);
+        assert!(qs[2].contains("user:Lecto-inc"));
+        assert!(qs[3].contains("user:other"));
+    }
+
+    #[test]
+    fn queries_for_tab_mine_ignores_watched_orgs() {
+        let qs = queries_for_tab("authored", &["Lecto-inc".to_string()]);
+        assert_eq!(qs.len(), 1);
+        assert!(qs[0].contains("author:@me"));
+    }
+
+    #[test]
+    fn queries_for_tab_strips_unsafe_chars_from_org() {
+        let qs = queries_for_tab("all", &["bad org!".to_string()]);
+        // spaces and "!" get filtered out; "badorg" survives
+        assert!(qs.last().unwrap().contains("user:badorg"));
+    }
+
+    #[test]
+    fn queries_for_tab_drops_fully_invalid_org() {
+        let qs = queries_for_tab("all", &["!@#$".to_string()]);
+        // only the two base queries remain
+        assert_eq!(qs.len(), 2);
+    }
+
+    #[test]
+    fn build_search_query_contains_expected_aliases() {
+        let q = build_search_query(3);
+        assert!(q.contains("$q0: String!"));
+        assert!(q.contains("$q2: String!"));
+        assert!(q.contains("s0: search(query: $q0"));
+        assert!(q.contains("s2: search(query: $q2"));
+        // Fragments are defined once and referenced from aliases
+        assert!(q.contains("fragment PrFields on PullRequest"));
+        assert!(q.contains("...PrFields"));
     }
 
     #[test]

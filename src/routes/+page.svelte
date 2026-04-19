@@ -33,6 +33,7 @@
   const NOTIFY_KEY = "eir.notifyEnabled";
   const EXCLUDED_REPOS_KEY = "eir.excludedRepos";
   const HIDDEN_ITEMS_KEY = "eir.hiddenItems";
+  const WATCHED_ORGS_KEY = "eir.watchedOrgs";
   const TABS: { id: Tab; label: string }[] = [
     { id: "all", label: "All" },
     { id: "authored", label: "Mine" },
@@ -64,7 +65,9 @@
   let selectedId = $state<number | null>(null);
   const excludedRepos = new SvelteSet<string>(loadExcludedRepos());
   const hiddenItems = new SvelteSet<number>(loadHiddenItems());
+  const watchedOrgs = new SvelteSet<string>(loadWatchedOrgs());
   let newExcludedRepo = $state("");
+  let newWatchedOrg = $state("");
 
   let prevThreads = new Map<number, string>();
   let hasLoadedOnce = false;
@@ -110,6 +113,19 @@
 
   function persistHiddenItems() {
     localStorage.setItem(HIDDEN_ITEMS_KEY, JSON.stringify([...hiddenItems]));
+  }
+
+  function loadWatchedOrgs(): string[] {
+    try {
+      const raw = localStorage.getItem(WATCHED_ORGS_KEY);
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function persistWatchedOrgs() {
+    localStorage.setItem(WATCHED_ORGS_KEY, JSON.stringify([...watchedOrgs]));
   }
 
   function loadIntervalFromStorage(): number {
@@ -173,7 +189,10 @@
       // server query so it can surface anything the user has hidden.
       const serverTab = activeTab === "hidden" ? "all" : activeTab;
       const [fetchedItems, fetchedNotifs] = await Promise.all([
-        invoke<WatchedItem[]>("fetch_watched", { tab: serverTab }),
+        invoke<WatchedItem[]>("fetch_watched", {
+          tab: serverTab,
+          watchedOrgs: [...watchedOrgs],
+        }),
         invoke<NotificationItem[]>("fetch_notifications"),
       ]);
 
@@ -525,6 +544,25 @@
     updateBadge();
   }
 
+  async function addWatchedOrg() {
+    const raw = newWatchedOrg.trim();
+    if (!raw) return;
+    // GitHub logins are [A-Za-z0-9-] — keep only safe characters.
+    const clean = raw.replace(/[^A-Za-z0-9_-]/g, "");
+    if (!clean) return;
+    watchedOrgs.add(clean);
+    persistWatchedOrgs();
+    newWatchedOrg = "";
+    // Broaden the server-side query immediately by refetching.
+    await loadItems({ silent: true });
+  }
+
+  async function removeWatchedOrg(org: string) {
+    watchedOrgs.delete(org);
+    persistWatchedOrgs();
+    await loadItems({ silent: true });
+  }
+
   async function switchTab(tab: Tab) {
     if (tab === activeTab) return;
     activeTab = tab;
@@ -641,6 +679,42 @@
         {#if shortcutError}
           <p class="error">{shortcutError}</p>
         {/if}
+
+        <div class="setting-section">
+          <span class="setting-label">Watched orgs / users</span>
+          {#if watchedOrgs.size === 0}
+            <p class="setting-hint">
+              Only your personal repos and items you're involved with show up
+              in All. Add an org login (e.g. <code>Lecto-inc</code>) to pull in
+              all open PRs from that org — catches dependabot PRs in org repos.
+            </p>
+          {:else}
+            <ul class="excluded-list">
+              {#each [...watchedOrgs].sort() as org (org)}
+                <li>
+                  <span class="excluded-repo">{org}</span>
+                  <button
+                    class="row-action"
+                    onclick={() => removeWatchedOrg(org)}
+                    aria-label="Remove"
+                    title="Remove"
+                  >
+                    ×
+                  </button>
+                </li>
+              {/each}
+            </ul>
+          {/if}
+          <div class="excluded-add">
+            <input
+              type="text"
+              placeholder="org login (e.g. Lecto-inc)"
+              bind:value={newWatchedOrg}
+              onkeydown={(e) => e.key === "Enter" && addWatchedOrg()}
+            />
+            <button class="secondary" onclick={addWatchedOrg}>Add</button>
+          </div>
+        </div>
 
         <div class="setting-section">
           <span class="setting-label">Excluded repositories</span>
