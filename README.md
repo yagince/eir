@@ -15,7 +15,7 @@ Named after Eir, the Norse goddess of healing. The icon combines a watching eye 
 - **Grouped list** — PRs and Issues grouped by repository with sticky headers and per-repo unread counts
 - **Filter tabs** — All / Mine / Review Requests / Mentions / Hidden, backed by different GitHub search queries
 - **Auto-refresh** — silent background polling every 30s–5min (configurable)
-- **Native notifications** — desktop notifications when a new PR or Issue first appears
+- **Native notifications** — desktop notifications when a new PR or Issue first appears (banner duration is set by the OS; on macOS, switch the style from *Banners* to *Alerts* under System Settings → Notifications → eir to keep them on screen until dismissed)
 - **Unread tracking** — macOS tray badge shows the unread count; Windows/Linux show it in the hover tooltip
 - **Global shortcut** — `Ctrl+Shift+E` toggles the popup from anywhere
 - **Light/dark aware** — template-mode tray icon on macOS and `prefers-color-scheme` styling everywhere
