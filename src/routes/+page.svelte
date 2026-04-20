@@ -220,8 +220,8 @@
   }
 
   async function loadItems({ silent = false }: { silent?: boolean } = {}) {
+    loading = true;
     if (!silent) {
-      loading = true;
       error = null;
     }
     try {
@@ -310,7 +310,7 @@
         error = msg;
       }
     } finally {
-      if (!silent) loading = false;
+      loading = false;
     }
   }
 
@@ -929,6 +929,7 @@
 </script>
 
 <main class="container">
+  <div class="progress-bar" class:visible={loading} aria-hidden="true"></div>
   {#if showingSettings}
     <section class="settings">
       <div class="settings-header">
@@ -1202,7 +1203,7 @@
         <p>Nothing here.</p>
       </section>
     {:else}
-      <ul class="list">
+      <ul class="list" class:dim={loading}>
         {#each groups as group (group.repo)}
           <li class="group">
             <div class="group-header">
@@ -1379,11 +1380,53 @@
   }
 
   .container {
+    position: relative;
     display: flex;
     flex-direction: column;
     height: 100vh;
     padding: 16px;
     box-sizing: border-box;
+  }
+
+  .progress-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    overflow: hidden;
+    opacity: 0;
+    transition: opacity 0.15s;
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  .progress-bar.visible {
+    opacity: 1;
+  }
+
+  .progress-bar::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    height: 100%;
+    width: 30%;
+    background: #0969da;
+    animation: progress-slide 1.1s ease-in-out infinite;
+  }
+
+  @keyframes progress-slide {
+    0% {
+      left: -30%;
+    }
+    100% {
+      left: 100%;
+    }
+  }
+
+  .list.dim {
+    opacity: 0.45;
+    transition: opacity 0.15s;
   }
 
   .toolbar {
