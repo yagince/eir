@@ -1,6 +1,10 @@
 # eir
 
+[![eir](https://yagince.github.io/eir/assets/ogp.png)](https://yagince.github.io/eir/)
+
 A menubar app that watches GitHub PRs and Issues — a from-scratch alternative to Trailer / Neat, built with Tauri v2 and SvelteKit. Runs on macOS, Windows, and Linux.
+
+**Website:** https://yagince.github.io/eir/
 
 Named after Eir, the Norse goddess of healing. The icon combines a watching eye with a feather.
 
