@@ -528,6 +528,7 @@
   }
 
   async function sendTestNotification() {
+    error = null;
     if (!(await ensureNotificationPermission())) {
       error =
         "OS notification permission not granted. Check System Settings → Notifications → eir.";
@@ -535,7 +536,8 @@
     }
     showNotification(
       "eir test notification",
-      "If you see this, notifications are working.",
+      "Click to open the eir repo.",
+      "https://github.com/yagince/eir",
     );
   }
 
@@ -1113,6 +1115,9 @@
           <kbd>Cmd</kbd>+<kbd>,</kbd> opens settings ·
           <kbd>Backspace</kbd> goes back.
         </p>
+        {#if error}
+          <p class="error">{error}</p>
+        {/if}
       </div>
     </section>
   {:else if phase === "idle"}
