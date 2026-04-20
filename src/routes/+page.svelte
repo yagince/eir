@@ -761,6 +761,31 @@
     );
   }
 
+  async function markAllVisibleAsRead() {
+    const threadIds = new Set<number>();
+    for (const item of visibleItems) {
+      const matching = notificationsByKey.get(itemKey(item));
+      if (!matching) continue;
+      for (const n of matching) threadIds.add(n.thread_id);
+    }
+    if (threadIds.size === 0) return;
+    const ok = await withPinnedWindow(() =>
+      ask(`Mark ${threadIds.size} notification(s) as read?`, {
+        title: "eir",
+        kind: "info",
+        okLabel: "Mark as read",
+      }),
+    );
+    if (!ok) return;
+    notifications = notifications.filter((n) => !threadIds.has(n.thread_id));
+    updateBadge();
+    await Promise.all(
+      [...threadIds].map((threadId) =>
+        invoke("mark_notification_read", { threadId }).catch(() => {}),
+      ),
+    );
+  }
+
   function onIntervalChange(value: number) {
     refreshMs = value;
     localStorage.setItem(INTERVAL_KEY, String(value));
@@ -853,6 +878,13 @@
       excludedRepos,
       hiddenItems,
     }),
+  );
+
+  const visibleUnreadCount = $derived(
+    visibleItems.reduce(
+      (acc, i) => acc + (notificationsByKey.has(itemKey(i)) ? 1 : 0),
+      0,
+    ),
   );
 
   const groups = $derived(
@@ -1116,6 +1148,16 @@
       <button class="refresh" onclick={() => loadItems()} disabled={loading}>
         {loading ? "Refreshing…" : "Refresh"}
       </button>
+      {#if visibleUnreadCount > 0}
+        <button
+          class="icon-btn"
+          onclick={markAllVisibleAsRead}
+          title="Mark {visibleUnreadCount} as read"
+          aria-label="Mark all as read"
+        >
+          ✓
+        </button>
+      {/if}
       <button
         class="icon-btn"
         onclick={() => (showingSettings = true)}
