@@ -1349,32 +1349,32 @@
     padding: 0;
   }
 
-  .list,
-  .settings {
+  :global(.list),
+  :global(.settings) {
     scrollbar-width: thin;
     scrollbar-color: rgba(0, 0, 0, 0.25) transparent;
   }
 
-  .list::-webkit-scrollbar,
-  .settings::-webkit-scrollbar {
+  :global(.list::-webkit-scrollbar),
+  :global(.settings::-webkit-scrollbar) {
     width: 8px;
   }
 
-  .list::-webkit-scrollbar-track,
-  .settings::-webkit-scrollbar-track {
+  :global(.list::-webkit-scrollbar-track),
+  :global(.settings::-webkit-scrollbar-track) {
     background: transparent;
   }
 
-  .list::-webkit-scrollbar-thumb,
-  .settings::-webkit-scrollbar-thumb {
+  :global(.list::-webkit-scrollbar-thumb),
+  :global(.settings::-webkit-scrollbar-thumb) {
     background-color: rgba(0, 0, 0, 0.2);
     border-radius: 4px;
     border: 2px solid transparent;
     background-clip: content-box;
   }
 
-  .list::-webkit-scrollbar-thumb:hover,
-  .settings::-webkit-scrollbar-thumb:hover {
+  :global(.list::-webkit-scrollbar-thumb:hover),
+  :global(.settings::-webkit-scrollbar-thumb:hover) {
     background-color: rgba(0, 0, 0, 0.35);
     background-clip: content-box;
   }
@@ -2230,16 +2230,16 @@
       background: rgba(139, 148, 158, 0.18);
       border-color: rgba(139, 148, 158, 0.5);
     }
-    .list,
-    .settings {
+    :global(.list),
+    :global(.settings) {
       scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
     }
-    .list::-webkit-scrollbar-thumb,
-    .settings::-webkit-scrollbar-thumb {
+    :global(.list::-webkit-scrollbar-thumb),
+    :global(.settings::-webkit-scrollbar-thumb) {
       background-color: rgba(255, 255, 255, 0.18);
     }
-    .list::-webkit-scrollbar-thumb:hover,
-    .settings::-webkit-scrollbar-thumb:hover {
+    :global(.list::-webkit-scrollbar-thumb:hover),
+    :global(.settings::-webkit-scrollbar-thumb:hover) {
       background-color: rgba(255, 255, 255, 0.32);
     }
   }
