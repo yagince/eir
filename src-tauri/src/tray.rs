@@ -2,8 +2,13 @@ use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    App, Manager, PhysicalPosition,
+    App, Emitter, Manager, PhysicalPosition,
 };
+
+/// Event emitted to the webview when the popup transitions from visible to
+/// hidden. The frontend listens for this to reset transient UI state (e.g.
+/// the Settings panel) so reopening starts from the list view.
+pub const POPUP_HIDDEN_EVENT: &str = "popup-hidden";
 
 // macOS uses a template-mode monochrome icon so the system can tint it based
 // on menubar state (dark/light/focus). Windows and Linux taskbars don't
@@ -62,6 +67,7 @@ pub fn toggle_popup(app: &tauri::AppHandle) {
     };
     if window.is_visible().unwrap_or(false) {
         let _ = window.hide();
+        let _ = app.emit(POPUP_HIDDEN_EVENT, ());
         return;
     }
     position_near_tray(app, &window);

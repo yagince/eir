@@ -551,6 +551,138 @@ fn merge_search_results(data: std::collections::HashMap<String, SearchResult>) -
 }
 
 // ---------------------------------------------------------------------------
+// fetch_item_states — look up the final state (open/closed/merged) of a
+// list of PRs/Issues by (repo, kind, number). Used to precisely label
+// disappearance notifications: when an item drops out of the `is:open`
+// search result we want to say "Merged" vs "Closed" rather than guessing.
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize, Clone)]
+pub struct ItemRef {
+    pub repo: String,
+    pub kind: String, // "pr" | "issue"
+    pub number: u64,
+}
+
+#[derive(Serialize)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct ItemState {
+    pub repo: String,
+    pub kind: &'static str,
+    pub number: u64,
+    pub state: &'static str, // "open" | "closed" | "merged" | "unknown"
+}
+
+/// Build the GraphQL query body (query string + variables) for a batch state
+/// lookup. Owner and name go through variables to avoid any string-escape
+/// surprises; number is inlined since it's a scalar from trusted data.
+fn build_item_states_query(items: &[ItemRef]) -> (String, serde_json::Map<String, serde_json::Value>) {
+    let mut var_decls: Vec<String> = Vec::new();
+    let mut aliases: Vec<String> = Vec::new();
+    let mut variables = serde_json::Map::new();
+
+    for (i, it) in items.iter().enumerate() {
+        let Some((owner, name)) = it.repo.split_once('/') else {
+            continue;
+        };
+        let sub = match it.kind.as_str() {
+            "pr" => format!("pullRequest(number: {}) {{ state }}", it.number),
+            "issue" => format!("issue(number: {}) {{ state }}", it.number),
+            _ => continue,
+        };
+        var_decls.push(format!("$o{i}: String!, $n{i}: String!"));
+        aliases.push(format!(
+            "  i{i}: repository(owner: $o{i}, name: $n{i}) {{ {sub} }}"
+        ));
+        variables.insert(format!("o{i}"), serde_json::Value::String(owner.to_string()));
+        variables.insert(format!("n{i}"), serde_json::Value::String(name.to_string()));
+    }
+
+    let query = format!(
+        "query Q({vars}) {{\n{aliases}\n}}",
+        vars = var_decls.join(", "),
+        aliases = aliases.join("\n"),
+    );
+    (query, variables)
+}
+
+fn parse_item_state(resp: &serde_json::Value, index: usize, kind: &str) -> &'static str {
+    let alias = format!("i{index}");
+    let Some(node) = resp.get("data").and_then(|d| d.get(&alias)) else {
+        return "unknown";
+    };
+    let inner_key = match kind {
+        "pr" => "pullRequest",
+        "issue" => "issue",
+        _ => return "unknown",
+    };
+    let raw = node
+        .get(inner_key)
+        .and_then(|v| v.get("state"))
+        .and_then(|s| s.as_str())
+        .unwrap_or("");
+    map_item_state(raw)
+}
+
+#[tauri::command]
+pub async fn fetch_item_states(
+    items: Vec<ItemRef>,
+    auth: State<'_, Mutex<AppState>>,
+) -> Result<Vec<ItemState>, String> {
+    if items.is_empty() {
+        return Ok(Vec::new());
+    }
+    let octo = build_octo(&auth)?;
+
+    let (query, variables) = build_item_states_query(&items);
+    let body = serde_json::json!({ "query": query, "variables": variables });
+
+    let resp: serde_json::Value = match octo.graphql(&body).await {
+        Ok(v) => v,
+        Err(err) => {
+            if is_unauthorized(&err) {
+                clear_stored_token(&auth);
+                return Err("not_authenticated".into());
+            }
+            return Err(err.to_string());
+        }
+    };
+
+    // Bubble GraphQL-level errors (e.g. a repo we no longer have access to)
+    // rather than silently returning "unknown" for every item — that would
+    // mask a real failure.
+    if let Some(errors) = resp.get("errors").and_then(|e| e.as_array()) {
+        if !errors.is_empty() {
+            let joined = errors
+                .iter()
+                .filter_map(|e| e.get("message").and_then(|m| m.as_str()))
+                .collect::<Vec<_>>()
+                .join("; ");
+            if !joined.is_empty() {
+                return Err(joined);
+            }
+        }
+    }
+
+    let mut out = Vec::with_capacity(items.len());
+    for (i, it) in items.iter().enumerate() {
+        let kind: &'static str = match it.kind.as_str() {
+            "pr" => "pr",
+            "issue" => "issue",
+            _ => continue,
+        };
+        let state = parse_item_state(&resp, i, kind);
+        out.push(ItemState {
+            repo: it.repo.clone(),
+            kind,
+            number: it.number,
+            state,
+        });
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------
 // Notifications — GitHub's GraphQL schema does not expose the notifications
 // inbox or mark-as-read, so these remain REST.
 // ---------------------------------------------------------------------------
@@ -1168,6 +1300,99 @@ mod tests {
         )]);
         let out = merge_search_results(data);
         assert_eq!(out.len(), 1);
+    }
+
+    fn make_item_ref(repo: &str, kind: &str, number: u64) -> ItemRef {
+        ItemRef {
+            repo: repo.to_string(),
+            kind: kind.to_string(),
+            number,
+        }
+    }
+
+    #[test]
+    fn build_item_states_query_uses_variables_for_owner_and_name() {
+        let (query, variables) = build_item_states_query(&[
+            make_item_ref("owner1/repo1", "pr", 10),
+            make_item_ref("owner2/repo2", "issue", 20),
+        ]);
+
+        // Each item gets its own aliased variables.
+        assert!(query.contains("$o0: String!, $n0: String!"));
+        assert!(query.contains("$o1: String!, $n1: String!"));
+        // Aliased repositories using those variables.
+        assert!(query.contains("i0: repository(owner: $o0, name: $n0)"));
+        assert!(query.contains("i1: repository(owner: $o1, name: $n1)"));
+        // Sub-selection differs by kind.
+        assert!(query.contains("pullRequest(number: 10) { state }"));
+        assert!(query.contains("issue(number: 20) { state }"));
+        // Variables carry the owner/name values.
+        assert_eq!(variables.get("o0").and_then(|v| v.as_str()), Some("owner1"));
+        assert_eq!(variables.get("n0").and_then(|v| v.as_str()), Some("repo1"));
+        assert_eq!(variables.get("o1").and_then(|v| v.as_str()), Some("owner2"));
+        assert_eq!(variables.get("n1").and_then(|v| v.as_str()), Some("repo2"));
+    }
+
+    #[test]
+    fn build_item_states_query_skips_malformed_repo() {
+        // A repo without a "/" is defensive-skipped; its slot simply doesn't
+        // appear in the query rather than producing a malformed GraphQL.
+        let (query, variables) = build_item_states_query(&[
+            make_item_ref("no-slash", "pr", 1),
+            make_item_ref("owner/repo", "pr", 2),
+        ]);
+        assert!(!query.contains("$o0"));
+        assert!(query.contains("$o1"));
+        assert!(!variables.contains_key("o0"));
+        assert!(variables.contains_key("o1"));
+    }
+
+    #[test]
+    fn build_item_states_query_skips_unknown_kind() {
+        let (query, _) = build_item_states_query(&[
+            make_item_ref("owner/repo", "discussion", 1),
+            make_item_ref("owner/repo", "pr", 2),
+        ]);
+        assert!(!query.contains("$o0"));
+        assert!(query.contains("$o1"));
+    }
+
+    #[test]
+    fn parse_item_state_maps_merged_closed_open() {
+        let resp = json!({
+            "data": {
+                "i0": { "pullRequest": { "state": "MERGED" } },
+                "i1": { "pullRequest": { "state": "CLOSED" } },
+                "i2": { "issue": { "state": "CLOSED" } },
+                "i3": { "issue": { "state": "OPEN" } }
+            }
+        });
+        assert_eq!(parse_item_state(&resp, 0, "pr"), "merged");
+        assert_eq!(parse_item_state(&resp, 1, "pr"), "closed");
+        assert_eq!(parse_item_state(&resp, 2, "issue"), "closed");
+        assert_eq!(parse_item_state(&resp, 3, "issue"), "open");
+    }
+
+    #[test]
+    fn parse_item_state_returns_unknown_for_missing_alias() {
+        let resp = json!({ "data": { "i0": { "pullRequest": { "state": "MERGED" } } } });
+        // Alias i99 isn't in the response — don't blow up, just say unknown.
+        assert_eq!(parse_item_state(&resp, 99, "pr"), "unknown");
+    }
+
+    #[test]
+    fn parse_item_state_returns_unknown_for_deleted_repo() {
+        // GitHub returns `null` for the repository alias when the repo was
+        // deleted or we lost access. The parser should fall back to unknown
+        // instead of panicking.
+        let resp = json!({ "data": { "i0": null } });
+        assert_eq!(parse_item_state(&resp, 0, "pr"), "unknown");
+    }
+
+    #[test]
+    fn parse_item_state_returns_unknown_for_unknown_kind() {
+        let resp = json!({ "data": { "i0": { "pullRequest": { "state": "MERGED" } } } });
+        assert_eq!(parse_item_state(&resp, 0, "commit"), "unknown");
     }
 
     #[test]

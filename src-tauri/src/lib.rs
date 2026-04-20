@@ -5,7 +5,7 @@ mod tray;
 
 use std::sync::Mutex;
 
-use tauri::{Manager, WindowEvent};
+use tauri::{Emitter, Manager, WindowEvent};
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -49,6 +49,7 @@ pub fn run() {
             auth::set_dialog_mode,
             github::fetch_watched,
             github::fetch_notifications,
+            github::fetch_item_states,
             github::mark_notification_read,
             tray::set_tray_badge,
             shortcut::get_toggle_shortcut,
@@ -77,6 +78,7 @@ pub fn run() {
                     .pinned;
                 if !pinned {
                     let _ = window.hide();
+                    let _ = window.app_handle().emit(tray::POPUP_HIDDEN_EVENT, ());
                 }
             }
         })
