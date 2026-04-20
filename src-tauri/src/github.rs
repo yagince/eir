@@ -68,7 +68,15 @@ pub struct WatchedItem {
 fn queries_for_tab(tab: &str, watched_orgs: &[String]) -> Vec<String> {
     match tab {
         "authored" => vec!["is:open is:pr author:@me archived:false".into()],
-        "review" => vec!["is:open is:pr review-requested:@me archived:false".into()],
+        // Two queries unioned via the GraphQL alias batching in `fetch_watched`:
+        // `review-requested` drops a PR out once you submit any review, so the
+        // tab used to "empty itself" after commenting/approving. Adding
+        // `reviewed-by` keeps PRs you've been assigned to — and touched —
+        // visible until they're closed.
+        "review" => vec![
+            "is:open is:pr review-requested:@me archived:false".into(),
+            "is:open is:pr reviewed-by:@me archived:false".into(),
+        ],
         "mentions" => vec!["is:open mentions:@me archived:false".into()],
         _ => {
             let mut qs = vec![
@@ -1080,6 +1088,21 @@ mod tests {
         let qs = queries_for_tab("authored", &["Lecto-inc".to_string()]);
         assert_eq!(qs.len(), 1);
         assert!(qs[0].contains("author:@me"));
+    }
+
+    #[test]
+    fn queries_for_tab_review_includes_requested_and_reviewed_by() {
+        let qs = queries_for_tab("review", &[]);
+        assert_eq!(qs.len(), 2);
+        assert!(qs.iter().any(|q| q.contains("review-requested:@me")));
+        assert!(qs.iter().any(|q| q.contains("reviewed-by:@me")));
+    }
+
+    #[test]
+    fn queries_for_tab_review_ignores_watched_orgs() {
+        let qs = queries_for_tab("review", &["Lecto-inc".to_string()]);
+        assert_eq!(qs.len(), 2);
+        assert!(qs.iter().all(|q| !q.contains("user:")));
     }
 
     #[test]

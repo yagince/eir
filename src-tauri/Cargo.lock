@@ -1073,6 +1073,7 @@ dependencies = [
 name = "eir"
 version = "0.4.1"
 dependencies = [
+ "image",
  "octocrab",
  "reqwest",
  "rustls",

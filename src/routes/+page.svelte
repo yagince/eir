@@ -220,8 +220,8 @@
   }
 
   async function loadItems({ silent = false }: { silent?: boolean } = {}) {
+    loading = true;
     if (!silent) {
-      loading = true;
       error = null;
     }
     try {
@@ -310,7 +310,7 @@
         error = msg;
       }
     } finally {
-      if (!silent) loading = false;
+      loading = false;
     }
   }
 
@@ -745,20 +745,42 @@
     }
   }
 
+  async function clearNotificationThreads(threadIds: Set<number>) {
+    if (threadIds.size === 0) return;
+    notifications = notifications.filter((n) => !threadIds.has(n.thread_id));
+    updateBadge();
+    await Promise.all(
+      [...threadIds].map((threadId) =>
+        invoke("mark_notification_read", { threadId }).catch(() => {}),
+      ),
+    );
+  }
+
   async function openItem(item: WatchedItem) {
     void openUrl(item.url);
     const matching = notificationsByKey.get(itemKey(item)) ?? [];
-    if (matching.length === 0) return;
-    const toClear = new Set(matching.map((n) => n.thread_id));
-    notifications = notifications.filter((n) => !toClear.has(n.thread_id));
-    updateBadge();
-    await Promise.all(
-      matching.map((n) =>
-        invoke("mark_notification_read", { threadId: n.thread_id }).catch(
-          () => {},
-        ),
-      ),
+    await clearNotificationThreads(
+      new Set(matching.map((n) => n.thread_id)),
     );
+  }
+
+  async function markAllVisibleAsRead() {
+    const threadIds = new Set<number>();
+    for (const item of visibleItems) {
+      const matching = notificationsByKey.get(itemKey(item));
+      if (!matching) continue;
+      for (const n of matching) threadIds.add(n.thread_id);
+    }
+    if (threadIds.size === 0) return;
+    const ok = await withPinnedWindow(() =>
+      ask(`Mark ${threadIds.size} notification(s) as read?`, {
+        title: "eir",
+        kind: "info",
+        okLabel: "Mark as read",
+      }),
+    );
+    if (!ok) return;
+    await clearNotificationThreads(threadIds);
   }
 
   function onIntervalChange(value: number) {
@@ -855,6 +877,10 @@
     }),
   );
 
+  const visibleUnreadCount = $derived(
+    visibleItems.filter((i) => notificationsByKey.has(itemKey(i))).length,
+  );
+
   const groups = $derived(
     groupByRepo(visibleItems, (i) => notificationsByKey.has(itemKey(i))),
   );
@@ -903,6 +929,7 @@
 </script>
 
 <main class="container">
+  <div class="progress-bar" class:visible={loading} aria-hidden="true"></div>
   {#if showingSettings}
     <section class="settings">
       <div class="settings-header">
@@ -1116,13 +1143,47 @@
       <button class="refresh" onclick={() => loadItems()} disabled={loading}>
         {loading ? "Refreshing…" : "Refresh"}
       </button>
+      {#if visibleUnreadCount > 0}
+        <button
+          class="icon-btn"
+          onclick={markAllVisibleAsRead}
+          title="Mark {visibleUnreadCount} as read"
+          aria-label="Mark all as read"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M18 6 7 17l-5-5" />
+            <path d="m22 10-7.5 7.5L13 16" />
+          </svg>
+        </button>
+      {/if}
       <button
         class="icon-btn"
         onclick={() => (showingSettings = true)}
         title="Settings"
         aria-label="Settings"
       >
-        ⚙
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path
+            d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
+          />
+          <circle cx="12" cy="12" r="3" />
+        </svg>
       </button>
       <button class="signout" onclick={signOut}>Sign out</button>
     </header>
@@ -1142,7 +1203,7 @@
         <p>Nothing here.</p>
       </section>
     {:else}
-      <ul class="list">
+      <ul class="list" class:dim={loading}>
         {#each groups as group (group.repo)}
           <li class="group">
             <div class="group-header">
@@ -1319,11 +1380,53 @@
   }
 
   .container {
+    position: relative;
     display: flex;
     flex-direction: column;
     height: 100vh;
     padding: 16px;
     box-sizing: border-box;
+  }
+
+  .progress-bar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    overflow: hidden;
+    opacity: 0;
+    transition: opacity 0.15s;
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  .progress-bar.visible {
+    opacity: 1;
+  }
+
+  .progress-bar::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    height: 100%;
+    width: 30%;
+    background: #0969da;
+    animation: progress-slide 1.1s ease-in-out infinite;
+  }
+
+  @keyframes progress-slide {
+    0% {
+      left: -30%;
+    }
+    100% {
+      left: 100%;
+    }
+  }
+
+  .list.dim {
+    opacity: 0.45;
+    transition: opacity 0.15s;
   }
 
   .toolbar {
@@ -1515,8 +1618,10 @@
   }
 
   .icon-btn {
-    padding: 0 10px;
-    font-size: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 10px;
     border: none;
     border-radius: 6px;
     background: rgba(0, 0, 0, 0.05);
@@ -1527,6 +1632,12 @@
 
   .icon-btn:hover {
     background: rgba(0, 0, 0, 0.1);
+  }
+
+  .icon-btn svg {
+    width: 16px;
+    height: 16px;
+    display: block;
   }
 
   .hint {
@@ -1592,11 +1703,12 @@
   }
 
   .signout {
-    background: none;
-    color: rgba(27, 27, 31, 0.6);
+    background: rgba(0, 0, 0, 0.05);
+    color: inherit;
   }
 
   .signout:hover {
+    background: rgba(209, 36, 47, 0.12);
     color: #d1242f;
   }
 
@@ -2008,12 +2120,19 @@
     .meta,
     .hint,
     .waiting,
-    .signout,
     .group-header,
     .back,
     .setting-hint,
     .setting-hint-inline {
       color: rgba(236, 236, 239, 0.6);
+    }
+    .signout {
+      background: rgba(255, 255, 255, 0.08);
+      color: inherit;
+    }
+    .signout:hover {
+      background: rgba(248, 81, 73, 0.2);
+      color: #ff7b72;
     }
     .setting-hint-inline.update-available {
       color: #3fb950;
