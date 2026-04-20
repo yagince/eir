@@ -1155,7 +1155,18 @@
           title="Mark {visibleUnreadCount} as read"
           aria-label="Mark all as read"
         >
-          ✓
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M18 6 7 17l-5-5" />
+            <path d="m22 10-7.5 7.5L13 16" />
+          </svg>
         </button>
       {/if}
       <button
@@ -1164,7 +1175,20 @@
         title="Settings"
         aria-label="Settings"
       >
-        ⚙
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path
+            d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
+          />
+          <circle cx="12" cy="12" r="3" />
+        </svg>
       </button>
       <button class="signout" onclick={signOut}>Sign out</button>
     </header>
@@ -1557,8 +1581,10 @@
   }
 
   .icon-btn {
-    padding: 0 10px;
-    font-size: 16px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 10px;
     border: none;
     border-radius: 6px;
     background: rgba(0, 0, 0, 0.05);
@@ -1569,6 +1595,12 @@
 
   .icon-btn:hover {
     background: rgba(0, 0, 0, 0.1);
+  }
+
+  .icon-btn svg {
+    width: 16px;
+    height: 16px;
+    display: block;
   }
 
   .hint {
@@ -1634,11 +1666,12 @@
   }
 
   .signout {
-    background: none;
-    color: rgba(27, 27, 31, 0.6);
+    background: rgba(0, 0, 0, 0.05);
+    color: inherit;
   }
 
   .signout:hover {
+    background: rgba(209, 36, 47, 0.12);
     color: #d1242f;
   }
 
@@ -2050,12 +2083,19 @@
     .meta,
     .hint,
     .waiting,
-    .signout,
     .group-header,
     .back,
     .setting-hint,
     .setting-hint-inline {
       color: rgba(236, 236, 239, 0.6);
+    }
+    .signout {
+      background: rgba(255, 255, 255, 0.08);
+      color: inherit;
+    }
+    .signout:hover {
+      background: rgba(248, 81, 73, 0.2);
+      color: #ff7b72;
     }
     .setting-hint-inline.update-available {
       color: #3fb950;
