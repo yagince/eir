@@ -32,4 +32,8 @@ tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-dialog = "2.7.0"
+# Used to synthesise the red-dot badge variant of the tray icon at startup.
+# Tauri already pulls `image` in via the `image-png` feature, but we list it
+# explicitly so the direct API usage has its own version pin.
+image = { version = "0.25", default-features = false, features = ["png"] }
 
