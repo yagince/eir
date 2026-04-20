@@ -745,19 +745,22 @@
     }
   }
 
+  async function clearNotificationThreads(threadIds: Set<number>) {
+    if (threadIds.size === 0) return;
+    notifications = notifications.filter((n) => !threadIds.has(n.thread_id));
+    updateBadge();
+    await Promise.all(
+      [...threadIds].map((threadId) =>
+        invoke("mark_notification_read", { threadId }).catch(() => {}),
+      ),
+    );
+  }
+
   async function openItem(item: WatchedItem) {
     void openUrl(item.url);
     const matching = notificationsByKey.get(itemKey(item)) ?? [];
-    if (matching.length === 0) return;
-    const toClear = new Set(matching.map((n) => n.thread_id));
-    notifications = notifications.filter((n) => !toClear.has(n.thread_id));
-    updateBadge();
-    await Promise.all(
-      matching.map((n) =>
-        invoke("mark_notification_read", { threadId: n.thread_id }).catch(
-          () => {},
-        ),
-      ),
+    await clearNotificationThreads(
+      new Set(matching.map((n) => n.thread_id)),
     );
   }
 
@@ -777,13 +780,7 @@
       }),
     );
     if (!ok) return;
-    notifications = notifications.filter((n) => !threadIds.has(n.thread_id));
-    updateBadge();
-    await Promise.all(
-      [...threadIds].map((threadId) =>
-        invoke("mark_notification_read", { threadId }).catch(() => {}),
-      ),
-    );
+    await clearNotificationThreads(threadIds);
   }
 
   function onIntervalChange(value: number) {
@@ -881,10 +878,7 @@
   );
 
   const visibleUnreadCount = $derived(
-    visibleItems.reduce(
-      (acc, i) => acc + (notificationsByKey.has(itemKey(i)) ? 1 : 0),
-      0,
-    ),
+    visibleItems.filter((i) => notificationsByKey.has(itemKey(i))).length,
   );
 
   const groups = $derived(

@@ -29,11 +29,11 @@ const TRAY_ID: &str = "main";
 #[cfg(target_os = "macos")]
 static BADGE_ICON_BYTES: OnceLock<Vec<u8>> = OnceLock::new();
 
-// Caches the last unread state we pushed to the tray. `set_icon` in Tauri v2
-// resets icon_as_template, and the re-apply is visible as a small flicker,
-// so we only call into the tray when the state actually changes.
+// Caches (count, has_unread) as last pushed to the tray. `set_icon` in Tauri
+// v2 resets icon_as_template, and the re-apply is visible as a small flicker,
+// so we only touch the tray when something actually changed.
 #[cfg(target_os = "macos")]
-static PREV_UNREAD: OnceLock<Mutex<Option<bool>>> = OnceLock::new();
+static PREV_TRAY: OnceLock<Mutex<Option<(u32, bool)>>> = OnceLock::new();
 
 /// Overlay a red filled circle in the upper-right corner of the base PNG
 /// and re-encode. Used only on macOS: paired with `set_icon_as_template(false)`
@@ -76,6 +76,14 @@ pub fn set_tray_badge(count: u32, has_unread: bool, app: tauri::AppHandle) {
     // variant that carries the unread indicator as a red dot.
     #[cfg(target_os = "macos")]
     {
+        let prev = PREV_TRAY.get_or_init(|| Mutex::new(None));
+        let mut prev_guard = prev.lock().expect("PREV_TRAY poisoned");
+        let next = (count, has_unread);
+        if *prev_guard == Some(next) {
+            return;
+        }
+        let prev_unread = prev_guard.map(|(_, u)| u);
+
         let title = if count == 0 {
             None
         } else {
@@ -84,27 +92,27 @@ pub fn set_tray_badge(count: u32, has_unread: bool, app: tauri::AppHandle) {
         eprintln!("[eir] set_tray_badge count={count} has_unread={has_unread} title={title:?}");
         let _ = tray.set_title(title);
 
-        let prev = PREV_UNREAD.get_or_init(|| Mutex::new(None));
-        let mut prev_guard = prev.lock().expect("PREV_UNREAD poisoned");
-        if *prev_guard != Some(has_unread) {
+        if prev_unread != Some(has_unread) {
             // Order matters: set_icon resets icon_as_template in Tauri v2
-            // (see tauri-apps/tauri#6527), so we always re-apply the template
-            // flag after swapping the icon.
-            if has_unread {
-                if let Some(bytes) = BADGE_ICON_BYTES.get() {
-                    if let Ok(image) = Image::from_bytes(bytes) {
+            // (see tauri-apps/tauri#6527), so re-apply the template flag
+            // after swapping the icon.
+            let icon_bytes: Option<&[u8]> = if has_unread {
+                BADGE_ICON_BYTES.get().map(Vec::as_slice)
+            } else {
+                Some(TRAY_ICON_BYTES)
+            };
+            if let Some(bytes) = icon_bytes {
+                match Image::from_bytes(bytes) {
+                    Ok(image) => {
                         let _ = tray.set_icon(Some(image));
                     }
+                    Err(err) => eprintln!("[eir] tray icon decode failed: {err}"),
                 }
-                let _ = tray.set_icon_as_template(false);
-            } else {
-                if let Ok(image) = Image::from_bytes(TRAY_ICON_BYTES) {
-                    let _ = tray.set_icon(Some(image));
-                }
-                let _ = tray.set_icon_as_template(true);
             }
-            *prev_guard = Some(has_unread);
+            let _ = tray.set_icon_as_template(!has_unread);
         }
+
+        *prev_guard = Some(next);
     }
 
     // Windows / Linux: no adjacent-text slot on the tray icon, so surface the
