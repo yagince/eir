@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { getVersion } from "@tauri-apps/api/app";
+  import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import {
     isPermissionGranted,
@@ -110,6 +111,7 @@
   let prevItems = new Map<number, WatchedItem>();
   let hasLoadedOnce = false;
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
+  let unlistenPopupHidden: UnlistenFn | null = null;
 
   function loadTabFromStorage(): Tab {
     const raw = localStorage.getItem(TAB_KEY);
@@ -264,11 +266,27 @@
         console.info(
           `[eir] refresh: ${fetchedNotifs.length} unread notifications (${fresh.length} new), ${itemChanges.length} item-level changes`,
         );
+        // Items in prev but missing from curr disappeared upstream. The
+        // search query is `is:open`, so in practice this means the item was
+        // closed / merged / archived (or moved out of scope, which is rare
+        // enough to tolerate as a false-positive "Closed" ping).
+        const currIds = new Set(fetchedItems.map((i) => i.id));
+        const removed: WatchedItem[] = [];
+        for (const [id, prev] of prevItems) {
+          if (currIds.has(id)) continue;
+          if (notifiedKeys.has(itemKey(prev))) continue;
+          removed.push(prev);
+        }
+
         if (fresh.length > 0) {
           await notify(fresh);
         }
         if (itemChanges.length > 0) {
           await notifyItemChanges(itemChanges);
+        }
+        if (removed.length > 0) {
+          const entries = await resolveRemovedStates(removed);
+          await notifyRemoved(entries);
         }
       } else {
         console.info(
@@ -328,6 +346,57 @@
       default:
         return "New activity";
     }
+  }
+
+  type RemovedEntry = { item: WatchedItem; state: string };
+
+  async function notifyRemoved(entries: RemovedEntry[]) {
+    if (!notifyEnabled) return;
+    if (!(await ensureNotificationPermission())) return;
+    for (const { item, state } of entries) {
+      const title = state === "merged" ? "Merged" : "Closed";
+      console.info(
+        `[eir] sending removal notification: ${title} — ${item.repo}#${item.number}`,
+      );
+      showNotification(
+        title,
+        `${item.repo}#${item.number} — ${item.title}`,
+        item.url,
+      );
+    }
+  }
+
+  async function resolveRemovedStates(
+    removed: WatchedItem[],
+  ): Promise<RemovedEntry[]> {
+    if (removed.length === 0) return [];
+    const refs = removed.map((i) => ({
+      repo: i.repo,
+      kind: i.kind,
+      number: i.number,
+    }));
+    type StateRow = {
+      repo: string;
+      kind: "pr" | "issue";
+      number: number;
+      state: string;
+    };
+    // A failed lookup (network blip, rate limit, etc.) shouldn't suppress the
+    // whole batch — fall back to an empty map so each item ends up labelled
+    // "Closed" by default, which is still better than silence.
+    const states = await invoke<StateRow[]>("fetch_item_states", {
+      items: refs,
+    }).catch((err) => {
+      console.warn("[eir] fetch_item_states failed:", err);
+      return [] as StateRow[];
+    });
+    const byKey = new Map<string, string>(
+      states.map((s) => [`${s.repo}:${s.kind}:${s.number}`, s.state]),
+    );
+    return removed.map((item) => ({
+      item,
+      state: byKey.get(itemKey(item)) ?? "closed",
+    }));
   }
 
   async function notifyItemChanges(
@@ -477,6 +546,20 @@
 
   onMount(async () => {
     window.addEventListener("keydown", handleGlobalKey);
+    // When the popup is hidden (focus loss or tray re-click), Settings is
+    // treated as transient: reopening should land back on the list scrolled
+    // to the top with the first item selected, so a fresh open feels like a
+    // fresh glance.
+    void listen("popup-hidden", () => {
+      showingSettings = false;
+      // Clear selection so the $effect picks flatItems[0] on next render;
+      // this also snaps keyboard nav back to the top.
+      selectedId = null;
+      const list = document.querySelector<HTMLElement>(".list");
+      if (list) list.scrollTop = 0;
+    }).then((fn) => {
+      unlistenPopupHidden = fn;
+    });
     void loadItems({ silent: true });
     // Silent update check on boot — if a new version is out, the Settings
     // button will show "Update available" and the user can choose to install.
@@ -502,6 +585,8 @@
   onDestroy(() => {
     stopRefresh();
     window.removeEventListener("keydown", handleGlobalKey);
+    unlistenPopupHidden?.();
+    unlistenPopupHidden = null;
   });
 
   function formatShortcut(e: KeyboardEvent): string | null {
@@ -738,6 +823,12 @@
     activeTab = tab;
     localStorage.setItem(TAB_KEY, tab);
     items = [];
+    // The diff anchors are per-tab: a different query returns a different
+    // set, so disappearing items aren't real closures and new items aren't
+    // genuinely new. Reset before refetching.
+    prevItems = new Map();
+    prevThreads = new Map();
+    hasLoadedOnce = false;
     await loadItems();
   }
 
