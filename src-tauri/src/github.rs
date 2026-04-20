@@ -576,7 +576,9 @@ pub struct ItemState {
 /// Build the GraphQL query body (query string + variables) for a batch state
 /// lookup. Owner and name go through variables to avoid any string-escape
 /// surprises; number is inlined since it's a scalar from trusted data.
-fn build_item_states_query(items: &[ItemRef]) -> (String, serde_json::Map<String, serde_json::Value>) {
+fn build_item_states_query(
+    items: &[ItemRef],
+) -> (String, serde_json::Map<String, serde_json::Value>) {
     let mut var_decls: Vec<String> = Vec::new();
     let mut aliases: Vec<String> = Vec::new();
     let mut variables = serde_json::Map::new();
@@ -594,7 +596,10 @@ fn build_item_states_query(items: &[ItemRef]) -> (String, serde_json::Map<String
         aliases.push(format!(
             "  i{i}: repository(owner: $o{i}, name: $n{i}) {{ {sub} }}"
         ));
-        variables.insert(format!("o{i}"), serde_json::Value::String(owner.to_string()));
+        variables.insert(
+            format!("o{i}"),
+            serde_json::Value::String(owner.to_string()),
+        );
         variables.insert(format!("n{i}"), serde_json::Value::String(name.to_string()));
     }
 
