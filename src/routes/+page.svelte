@@ -35,7 +35,7 @@
     expires_in: number;
   };
 
-  type Phase = "idle" | "pending" | "loaded";
+  type Phase = "bootstrapping" | "idle" | "pending" | "loaded";
 
   const DEFAULT_REFRESH_MS = 60_000;
   const TAB_KEY = "eir.tab";
@@ -58,7 +58,7 @@
     { value: 300_000, label: "5 minutes" },
   ];
 
-  let phase = $state<Phase>("idle");
+  let phase = $state<Phase>("bootstrapping");
   let deviceCode = $state<DeviceCode | null>(null);
   let items = $state<WatchedItem[]>([]);
   let loading = $state(false);
@@ -1296,6 +1296,29 @@
         {/if}
       </div>
     </section>
+  {:else if phase === "bootstrapping"}
+    <section class="auth" aria-busy="true">
+      <div class="boot-logo-wrap">
+        <svg
+          class="boot-wave"
+          viewBox="0 0 900 300"
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          <defs>
+            <linearGradient id="boot-wave-gradient" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#cdece5" stop-opacity="0" />
+              <stop offset="40%" stop-color="#b8e4da" stop-opacity="0.35" />
+              <stop offset="100%" stop-color="#8fd0c4" stop-opacity="0.75" />
+            </linearGradient>
+          </defs>
+          <path
+            d="M 0,300 v -150 q 150,-50 300,0 t 300,0 q 150,-50 300,0 v 150 Z"
+            fill="url(#boot-wave-gradient)"
+          />
+        </svg>
+      </div>
+    </section>
   {:else if phase === "idle"}
     <section class="auth">
       <p class="hint">Sign in to start tracking your PRs and Issues.</p>
@@ -1633,6 +1656,34 @@
     align-items: center;
     text-align: center;
     gap: 12px;
+  }
+
+  .boot-logo-wrap {
+    position: relative;
+    width: 160px;
+    height: 160px;
+    overflow: hidden;
+    background: url(/icon.png) center / 100% 100% no-repeat;
+    -webkit-mask: url(/icon.png) center / 100% 100% no-repeat;
+    mask: url(/icon.png) center / 100% 100% no-repeat;
+  }
+
+  .boot-wave {
+    position: absolute;
+    inset: 0;
+    width: 300%;
+    height: 100%;
+    pointer-events: none;
+    animation: boot-wave 3s linear infinite;
+  }
+
+  @keyframes boot-wave {
+    from {
+      transform: translateX(0);
+    }
+    to {
+      transform: translateX(-66.66%);
+    }
   }
 
   .settings {
