@@ -25,7 +25,27 @@
     relativeTime,
     repoSuggestionsFrom,
   } from "$lib/list";
+  import {
+    loadExcludedRepos,
+    loadHiddenItems,
+    loadInterval,
+    loadNotify,
+    loadTab,
+    loadTheme,
+    loadWatchedOrgs,
+    persistExcludedRepos,
+    persistHiddenItems,
+    persistInterval,
+    persistNotify,
+    persistTab,
+    persistTheme,
+    persistWatchedOrgs,
+    type Theme,
+  } from "$lib/storage";
   import type { NotificationItem, Tab, WatchedItem } from "$lib/types";
+  import Auth from "$lib/components/Auth.svelte";
+  import ItemList from "$lib/components/ItemList.svelte";
+  import Settings from "$lib/components/Settings.svelte";
 
   type DeviceCode = {
     user_code: string;
@@ -37,13 +57,11 @@
 
   type Phase = "bootstrapping" | "idle" | "pending" | "loaded";
 
-  const DEFAULT_REFRESH_MS = 60_000;
-  const TAB_KEY = "eir.tab";
-  const INTERVAL_KEY = "eir.refreshMs";
-  const NOTIFY_KEY = "eir.notifyEnabled";
-  const EXCLUDED_REPOS_KEY = "eir.excludedRepos";
-  const HIDDEN_ITEMS_KEY = "eir.hiddenItems";
-  const WATCHED_ORGS_KEY = "eir.watchedOrgs";
+  const THEME_OPTIONS: { value: Theme; label: string }[] = [
+    { value: "system", label: "System" },
+    { value: "light", label: "Light" },
+    { value: "dark", label: "Dark" },
+  ];
   const TABS: { id: Tab; label: string }[] = [
     { id: "all", label: "All" },
     { id: "authored", label: "Mine" },
@@ -64,10 +82,14 @@
   let loading = $state(false);
   let error = $state<string | null>(null);
   let copied = $state(false);
-  let activeTab = $state<Tab>(loadTabFromStorage());
+  let activeTab = $state<Tab>(loadTab());
   let showingSettings = $state(false);
-  let refreshMs = $state<number>(loadIntervalFromStorage());
-  let notifyEnabled = $state<boolean>(loadNotifyFromStorage());
+  let refreshMs = $state<number>(loadInterval());
+  let notifyEnabled = $state<boolean>(loadNotify());
+  let theme = $state<Theme>(loadTheme());
+  let systemDark = $state<boolean>(
+    window.matchMedia("(prefers-color-scheme: dark)").matches,
+  );
   let notifications = $state<NotificationItem[]>([]);
   let toggleShortcut = $state<string>("Ctrl+Shift+E");
   let capturingShortcut = $state(false);
@@ -114,70 +136,18 @@
   let hasLoadedOnce = false;
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
   let unlistenPopupHidden: UnlistenFn | null = null;
+  let systemThemeMedia: MediaQueryList | null = null;
+  let systemThemeListener: ((e: MediaQueryListEvent) => void) | null = null;
 
-  function loadTabFromStorage(): Tab {
-    const raw = localStorage.getItem(TAB_KEY);
-    if (
-      raw === "authored" ||
-      raw === "review" ||
-      raw === "mentions" ||
-      raw === "hidden"
-    ) {
-      return raw;
-    }
-    return "all";
-  }
+  $effect(() => {
+    const resolved =
+      theme === "system" ? (systemDark ? "dark" : "light") : theme;
+    document.documentElement.setAttribute("data-theme", resolved);
+  });
 
-  function loadExcludedRepos(): string[] {
-    try {
-      const raw = localStorage.getItem(EXCLUDED_REPOS_KEY);
-      return raw ? JSON.parse(raw) : [];
-    } catch {
-      return [];
-    }
-  }
-
-  function persistExcludedRepos() {
-    localStorage.setItem(
-      EXCLUDED_REPOS_KEY,
-      JSON.stringify([...excludedRepos]),
-    );
-  }
-
-  function loadHiddenItems(): number[] {
-    try {
-      const raw = localStorage.getItem(HIDDEN_ITEMS_KEY);
-      return raw ? JSON.parse(raw) : [];
-    } catch {
-      return [];
-    }
-  }
-
-  function persistHiddenItems() {
-    localStorage.setItem(HIDDEN_ITEMS_KEY, JSON.stringify([...hiddenItems]));
-  }
-
-  function loadWatchedOrgs(): string[] {
-    try {
-      const raw = localStorage.getItem(WATCHED_ORGS_KEY);
-      return raw ? JSON.parse(raw) : [];
-    } catch {
-      return [];
-    }
-  }
-
-  function persistWatchedOrgs() {
-    localStorage.setItem(WATCHED_ORGS_KEY, JSON.stringify([...watchedOrgs]));
-  }
-
-  function loadIntervalFromStorage(): number {
-    const raw = localStorage.getItem(INTERVAL_KEY);
-    const n = raw ? Number(raw) : NaN;
-    return Number.isFinite(n) && n >= 5_000 ? n : DEFAULT_REFRESH_MS;
-  }
-
-  function loadNotifyFromStorage(): boolean {
-    return localStorage.getItem(NOTIFY_KEY) !== "0";
+  function onThemeChange(value: Theme) {
+    theme = value;
+    persistTheme(value);
   }
 
   const notificationsByKey = $derived.by(() => {
@@ -554,6 +524,11 @@
     // the popup is hidden gets overridden by the webview's scroll
     // restoration when it's shown again.
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    systemThemeMedia = window.matchMedia("(prefers-color-scheme: dark)");
+    systemThemeListener = (e) => {
+      systemDark = e.matches;
+    };
+    systemThemeMedia.addEventListener("change", systemThemeListener);
     // When the popup is hidden (focus loss or tray re-click), Settings is
     // treated as transient: reopening should land back on the list with
     // the first item selected, so a fresh open feels like a fresh glance.
@@ -593,6 +568,11 @@
     document.removeEventListener("visibilitychange", handleVisibilityChange);
     unlistenPopupHidden?.();
     unlistenPopupHidden = null;
+    if (systemThemeMedia && systemThemeListener) {
+      systemThemeMedia.removeEventListener("change", systemThemeListener);
+    }
+    systemThemeMedia = null;
+    systemThemeListener = null;
   });
 
   function handleVisibilityChange() {
@@ -797,24 +777,24 @@
 
   function onIntervalChange(value: number) {
     refreshMs = value;
-    localStorage.setItem(INTERVAL_KEY, String(value));
+    persistInterval(value);
     restartRefreshIfRunning();
   }
 
   function onNotifyChange(enabled: boolean) {
     notifyEnabled = enabled;
-    localStorage.setItem(NOTIFY_KEY, enabled ? "1" : "0");
+    persistNotify(enabled);
   }
 
   function hideItem(id: number) {
     hiddenItems.add(id);
-    persistHiddenItems();
+    persistHiddenItems(hiddenItems);
     updateBadge();
   }
 
   function unhideItem(id: number) {
     hiddenItems.delete(id);
-    persistHiddenItems();
+    persistHiddenItems(hiddenItems);
     updateBadge();
   }
 
@@ -822,14 +802,14 @@
     const name = newExcludedRepo.trim();
     if (!name || !name.includes("/")) return;
     excludedRepos.add(name);
-    persistExcludedRepos();
+    persistExcludedRepos(excludedRepos);
     newExcludedRepo = "";
     updateBadge();
   }
 
   function removeExcludedRepo(repo: string) {
     excludedRepos.delete(repo);
-    persistExcludedRepos();
+    persistExcludedRepos(excludedRepos);
     updateBadge();
   }
 
@@ -840,7 +820,7 @@
     const clean = raw.replace(/[^A-Za-z0-9_-]/g, "");
     if (!clean) return;
     watchedOrgs.add(clean);
-    persistWatchedOrgs();
+    persistWatchedOrgs(watchedOrgs);
     newWatchedOrg = "";
     // Broaden the server-side query immediately by refetching.
     await loadItems({ silent: true });
@@ -848,14 +828,14 @@
 
   async function removeWatchedOrg(org: string) {
     watchedOrgs.delete(org);
-    persistWatchedOrgs();
+    persistWatchedOrgs(watchedOrgs);
     await loadItems({ silent: true });
   }
 
   async function switchTab(tab: Tab) {
     if (tab === activeTab) return;
     activeTab = tab;
-    localStorage.setItem(TAB_KEY, tab);
+    persistTab(tab);
     items = [];
     // The diff anchors are per-tab: a different query returns a different
     // set, so disappearing items aren't real closures and new items aren't
@@ -872,6 +852,7 @@
     version: number;
     refreshMs?: number;
     notifyEnabled?: boolean;
+    theme?: Theme;
     excludedRepos?: string[];
     watchedOrgs?: string[];
     hiddenItems?: number[];
@@ -883,6 +864,7 @@
       version: SETTINGS_EXPORT_VERSION,
       refreshMs,
       notifyEnabled,
+      theme,
       excludedRepos: [...excludedRepos].sort(),
       watchedOrgs: [...watchedOrgs].sort(),
       hiddenItems: [...hiddenItems].sort((a, b) => a - b),
@@ -958,13 +940,22 @@
       applied.push("notifications");
     }
 
+    if (
+      data.theme === "system" ||
+      data.theme === "light" ||
+      data.theme === "dark"
+    ) {
+      onThemeChange(data.theme);
+      applied.push("theme");
+    }
+
     if (Array.isArray(data.excludedRepos)) {
       const next = data.excludedRepos.filter(
         (r): r is string => typeof r === "string" && r.includes("/"),
       );
       excludedRepos.clear();
       for (const r of next) excludedRepos.add(r);
-      persistExcludedRepos();
+      persistExcludedRepos(excludedRepos);
       applied.push("excluded repos");
     }
 
@@ -974,7 +965,7 @@
       );
       watchedOrgs.clear();
       for (const o of next) watchedOrgs.add(o);
-      persistWatchedOrgs();
+      persistWatchedOrgs(watchedOrgs);
       applied.push("watched orgs");
     }
 
@@ -984,7 +975,7 @@
       );
       hiddenItems.clear();
       for (const n of next) hiddenItems.add(n);
-      persistHiddenItems();
+      persistHiddenItems(hiddenItems);
       applied.push("hidden items");
     }
 
@@ -1088,214 +1079,43 @@
 <main class="container">
   <div class="progress-bar" class:visible={loading} aria-hidden="true"></div>
   {#if showingSettings}
-    <section class="settings">
-      <div class="settings-header">
-        <button class="back" onclick={() => (showingSettings = false)}>
-          ← Back
-        </button>
-      </div>
-      <div class="settings-body">
-        <label class="setting-row">
-          <span class="setting-label">Refresh interval</span>
-          <select
-            value={refreshMs}
-            onchange={(e) => onIntervalChange(Number(e.currentTarget.value))}
-          >
-            {#each REFRESH_OPTIONS as opt (opt.value)}
-              <option value={opt.value}>{opt.label}</option>
-            {/each}
-          </select>
-        </label>
-        <label class="setting-row">
-          <span class="setting-label">Desktop notifications</span>
-          <input
-            type="checkbox"
-            checked={notifyEnabled}
-            onchange={(e) => onNotifyChange(e.currentTarget.checked)}
-          />
-        </label>
-        <label class="setting-row">
-          <span class="setting-label">Start at login</span>
-          <input
-            type="checkbox"
-            checked={autostartEnabled === true}
-            disabled={autostartEnabled === null}
-            onchange={(e) => toggleAutostart(e.currentTarget.checked)}
-          />
-        </label>
-        <div class="setting-row">
-          <span class="setting-label">Test notification</span>
-          <button class="secondary" onclick={sendTestNotification}>Send</button>
-        </div>
-
-        <div class="setting-row">
-          <span class="setting-label">
-            Check for updates
-            {#if appVersion}
-              <span class="setting-hint-inline">— v{appVersion}</span>
-            {/if}
-            {#if updateStatus.kind === "up-to-date"}
-              <span class="setting-hint-inline">· already latest</span>
-            {:else if updateStatus.kind === "available"}
-              <span class="setting-hint-inline update-available"
-                >· v{updateStatus.update.version} available</span
-              >
-            {:else if updateStatus.kind === "installed"}
-              <span class="setting-hint-inline">· installed, relaunching…</span>
-            {:else if updateStatus.kind === "error"}
-              <span class="setting-hint-inline error-inline"
-                >· {updateStatus.message}</span
-              >
-            {/if}
-          </span>
-          <button
-            class="secondary"
-            disabled={updateStatus.kind === "checking" ||
-              updateStatus.kind === "downloading"}
-            onclick={() =>
-              updateStatus.kind === "available"
-                ? installPendingUpdate()
-                : runUpdateCheck({ interactive: true })}
-          >
-            {#if updateStatus.kind === "checking"}
-              Checking…
-            {:else if updateStatus.kind === "downloading"}
-              Installing…
-            {:else if updateStatus.kind === "available"}
-              Install v{updateStatus.update.version}
-            {:else}
-              Check
-            {/if}
-          </button>
-        </div>
-        <div class="setting-row">
-          <span class="setting-label">Toggle popup shortcut</span>
-          <button
-            class="shortcut-capture"
-            class:capturing={capturingShortcut}
-            onclick={startCaptureShortcut}
-          >
-            {#if capturingShortcut}
-              Press keys…
-            {:else}
-              {toggleShortcut}
-            {/if}
-          </button>
-        </div>
-        {#if shortcutError}
-          <p class="error">{shortcutError}</p>
-        {/if}
-
-        <div class="setting-section">
-          <span class="setting-label">Watched orgs / users</span>
-          {#if watchedOrgs.size === 0}
-            <p class="setting-hint">
-              Only your personal repos and items you're involved with show up
-              in All. Add an org login (e.g. <code>Lecto-inc</code>) to pull in
-              all open PRs from that org — catches dependabot PRs in org repos.
-            </p>
-          {:else}
-            <ul class="excluded-list">
-              {#each [...watchedOrgs].sort() as org (org)}
-                <li>
-                  <span class="excluded-repo">{org}</span>
-                  <button
-                    class="row-action"
-                    onclick={() => removeWatchedOrg(org)}
-                    aria-label="Remove"
-                    title="Remove"
-                  >
-                    ×
-                  </button>
-                </li>
-              {/each}
-            </ul>
-          {/if}
-          <div class="excluded-add">
-            <input
-              type="text"
-              list="org-suggestions"
-              placeholder="org login (e.g. Lecto-inc)"
-              bind:value={newWatchedOrg}
-              onkeydown={(e) => e.key === "Enter" && addWatchedOrg()}
-            />
-            <datalist id="org-suggestions">
-              {#each orgSuggestions as org (org)}
-                <option value={org}></option>
-              {/each}
-            </datalist>
-            <button class="secondary" onclick={addWatchedOrg}>Add</button>
-          </div>
-        </div>
-
-        <div class="setting-section">
-          <span class="setting-label">Excluded repositories</span>
-          {#if excludedRepos.size === 0}
-            <p class="setting-hint">None. Items from all repos are shown.</p>
-          {:else}
-            <ul class="excluded-list">
-              {#each [...excludedRepos].sort() as repo (repo)}
-                <li>
-                  <span class="excluded-repo">{repo}</span>
-                  <button
-                    class="row-action"
-                    onclick={() => removeExcludedRepo(repo)}
-                    aria-label="Remove"
-                    title="Remove"
-                  >
-                    ×
-                  </button>
-                </li>
-              {/each}
-            </ul>
-          {/if}
-          <div class="excluded-add">
-            <input
-              type="text"
-              list="repo-suggestions"
-              placeholder="owner/repo"
-              bind:value={newExcludedRepo}
-              onkeydown={(e) => e.key === "Enter" && addExcludedRepo()}
-            />
-            <datalist id="repo-suggestions">
-              {#each repoSuggestions as repo (repo)}
-                <option value={repo}></option>
-              {/each}
-            </datalist>
-            <button class="secondary" onclick={addExcludedRepo}>Add</button>
-          </div>
-        </div>
-
-        <div class="setting-section">
-          <span class="setting-label">Backup settings</span>
-          <p class="setting-hint">
-            Export your configuration (refresh interval, notifications,
-            watched orgs, excluded repos, hidden items, shortcut) as a JSON
-            file, or import a previously saved file to restore it.
-          </p>
-          <div class="setting-buttons">
-            <button class="secondary" onclick={exportSettings}>Export</button>
-            <button class="secondary" onclick={importSettings}>Import</button>
-          </div>
-          {#if settingsIoNotice}
-            <p class="setting-hint io-path" title={settingsIoNotice}>
-              {settingsIoNotice}
-            </p>
-          {/if}
-          {#if settingsIoError}
-            <p class="error">{settingsIoError}</p>
-          {/if}
-        </div>
-
-        <p class="setting-hint">
-          <kbd>Cmd</kbd>+<kbd>,</kbd> opens settings ·
-          <kbd>Backspace</kbd> goes back.
-        </p>
-        {#if error}
-          <p class="error">{error}</p>
-        {/if}
-      </div>
-    </section>
+    <Settings
+      {refreshMs}
+      refreshOptions={REFRESH_OPTIONS}
+      {notifyEnabled}
+      {theme}
+      themeOptions={THEME_OPTIONS}
+      {autostartEnabled}
+      {appVersion}
+      {toggleShortcut}
+      {capturingShortcut}
+      {shortcutError}
+      {updateStatus}
+      {watchedOrgs}
+      {excludedRepos}
+      {orgSuggestions}
+      {repoSuggestions}
+      {error}
+      {settingsIoNotice}
+      {settingsIoError}
+      bind:newWatchedOrg
+      bind:newExcludedRepo
+      onBack={() => (showingSettings = false)}
+      {onIntervalChange}
+      {onNotifyChange}
+      {onThemeChange}
+      onToggleAutostart={toggleAutostart}
+      onSendTestNotification={sendTestNotification}
+      onRunUpdateCheck={() => runUpdateCheck({ interactive: true })}
+      onInstallUpdate={installPendingUpdate}
+      onStartCaptureShortcut={startCaptureShortcut}
+      onAddWatchedOrg={addWatchedOrg}
+      onRemoveWatchedOrg={removeWatchedOrg}
+      onAddExcludedRepo={addExcludedRepo}
+      onRemoveExcludedRepo={removeExcludedRepo}
+      onExportSettings={exportSettings}
+      onImportSettings={importSettings}
+    />
   {:else if phase === "bootstrapping"}
     <section class="auth" aria-busy="true">
       <div class="boot-logo-wrap">
@@ -1320,232 +1140,125 @@
       </div>
     </section>
   {:else if phase === "idle"}
-    <section class="auth">
-      <p class="hint">Sign in to start tracking your PRs and Issues.</p>
-      <button class="primary" onclick={signIn}>Sign in with GitHub</button>
-      {#if error}
-        <p class="error">{error}</p>
-      {/if}
-    </section>
+    <Auth phase="idle" {error} onSignIn={signIn} />
   {:else if phase === "pending" && deviceCode}
-    {@const dc = deviceCode}
-    <section class="device">
-      <p class="hint">Enter this code on GitHub:</p>
-      <button class="code" onclick={copyCode} title="Click to copy">
-        {dc.user_code}
-      </button>
-      <p class="copy-status" class:ok={copied}>
-        {copied ? "✓ Copied to clipboard" : "Tap to copy"}
-      </p>
-      <button class="secondary" onclick={() => openUrl(dc.verification_uri)}>
-        Open GitHub again
-      </button>
-      <p class="waiting">Waiting for authorization…</p>
-    </section>
+    <Auth
+      phase="pending"
+      deviceCode={deviceCode}
+      {copied}
+      {error}
+      onCopyCode={copyCode}
+      onReopenVerification={(url) => openUrl(url)}
+    />
   {:else}
-    <header class="toolbar">
-      <button class="refresh" onclick={() => loadItems()} disabled={loading}>
-        {loading ? "Refreshing…" : "Refresh"}
-      </button>
-      {#if visibleUnreadCount > 0}
-        <button
-          class="icon-btn"
-          onclick={markAllVisibleAsRead}
-          title="Mark {visibleUnreadCount} as read"
-          aria-label="Mark all as read"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M18 6 7 17l-5-5" />
-            <path d="m22 10-7.5 7.5L13 16" />
-          </svg>
-        </button>
-      {/if}
-      <button
-        class="icon-btn"
-        onclick={() => (showingSettings = true)}
-        title="Settings"
-        aria-label="Settings"
-      >
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <path
-            d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"
-          />
-          <circle cx="12" cy="12" r="3" />
-        </svg>
-      </button>
-      <button class="signout" onclick={signOut}>Sign out</button>
-    </header>
-    <nav class="tabs">
-      {#each TABS as tab (tab.id)}
-        <button
-          class="tab"
-          class:active={activeTab === tab.id}
-          onclick={() => switchTab(tab.id)}
-        >
-          {tab.label}
-        </button>
-      {/each}
-    </nav>
-    {#if visibleItems.length === 0 && !loading}
-      <section class="empty">
-        <p>Nothing here.</p>
-      </section>
-    {:else}
-      <ul class="list" class:dim={loading}>
-        {#each groups as group (group.repo)}
-          <li class="group">
-            <div class="group-header">
-              <span class="group-repo">{group.repo}</span>
-              {#if group.unreadCount > 0}
-                <span class="group-count">{group.unreadCount}</span>
-              {/if}
-            </div>
-            <ul class="group-items">
-              {#each group.items as item (item.id)}
-                <li class="item-row" data-item-id={item.id}>
-                  <button
-                    class="item"
-                    class:unread={notificationsByKey.has(itemKey(item))}
-                    class:selected={item.id === selectedId}
-                    class:draft={item.is_draft}
-                    onclick={() => openItem(item)}
-                  >
-                    <span class="badge" class:pr={item.kind === "pr"}>
-                      {item.kind === "pr" ? "PR" : "IS"}
-                    </span>
-                    <span class="body">
-                      <span class="title">
-                        {#if item.is_draft}
-                          <span class="draft-label">DRAFT</span>
-                        {/if}
-                        <span class="title-text">{item.title}</span>
-                      </span>
-                      <span class="meta">
-                        <img
-                          class="avatar"
-                          src={item.author_avatar}
-                          alt=""
-                          loading="lazy"
-                        />
-                        <span class="author">{item.author}</span>
-                        <span class="sep">·</span>
-                        <span>#{item.number}</span>
-                        <span class="sep">·</span>
-                        <span>{relativeTime(item.updated_at)}</span>
-                        {#if item.comments > 0}
-                          <span class="sep">·</span>
-                          <span class="comments" title="Comments">
-                            💬 {item.comments}
-                          </span>
-                        {/if}
-                        {#if item.ci_status && item.ci_status !== "unknown"}
-                          <span class="sep">·</span>
-                          <span
-                            class="ci ci-{item.ci_status}"
-                            title="CI: {item.ci_status}"
-                          >
-                            {#if item.ci_status === "success"}✓{:else if item.ci_status === "failure" || item.ci_status === "error"}✗{:else}⏱{/if}
-                          </span>
-                        {/if}
-                      </span>
-                      {#if item.reviewers.length > 0}
-                        <span class="reviewers">
-                          {#each item.reviewers as r (r.login)}
-                            <span class="reviewer-chip reviewer-{r.state}">
-                              <img
-                                class="reviewer-chip-avatar"
-                                src={r.avatar_url}
-                                alt=""
-                                loading="lazy"
-                              />
-                              <span class="reviewer-chip-name">{r.login}</span>
-                              <span class="reviewer-chip-state">
-                                {#if r.state === "approved"}
-                                  approved
-                                {:else if r.state === "changes_requested"}
-                                  changes
-                                {:else if r.state === "commented"}
-                                  commented
-                                {:else if r.state === "dismissed"}
-                                  dismissed
-                                {:else}
-                                  not yet
-                                {/if}
-                              </span>
-                            </span>
-                          {/each}
-                        </span>
-                      {/if}
-                      {#if item.commenters.length > 0}
-                        <span class="commenters">
-                          {#each item.commenters as c (c.login)}
-                            <span class="commenter-chip" title={c.login}>
-                              <img
-                                class="commenter-chip-avatar"
-                                src={c.avatar_url}
-                                alt=""
-                                loading="lazy"
-                              />
-                              <span class="commenter-chip-name">{c.login}</span>
-                            </span>
-                          {/each}
-                        </span>
-                      {/if}
-                    </span>
-                  </button>
-                  {#if activeTab === "hidden"}
-                    <button
-                      class="row-action"
-                      onclick={() => unhideItem(item.id)}
-                      title="Unhide"
-                      aria-label="Unhide"
-                    >
-                      ↩
-                    </button>
-                  {:else}
-                    <button
-                      class="row-action"
-                      onclick={() => hideItem(item.id)}
-                      title="Hide"
-                      aria-label="Hide"
-                    >
-                      ×
-                    </button>
-                  {/if}
-                </li>
-              {/each}
-            </ul>
-          </li>
-        {/each}
-      </ul>
-    {/if}
-    {#if error}
-      <p class="error">{error}</p>
-    {/if}
+    <ItemList
+      {loading}
+      {activeTab}
+      visibleItemsCount={visibleItems.length}
+      {visibleUnreadCount}
+      {groups}
+      {selectedId}
+      {notificationsByKey}
+      tabs={TABS}
+      {error}
+      onRefresh={() => loadItems()}
+      onMarkAllVisibleAsRead={markAllVisibleAsRead}
+      onShowSettings={() => (showingSettings = true)}
+      onSignOut={signOut}
+      onSwitchTab={switchTab}
+      onOpenItem={openItem}
+      onHideItem={hideItem}
+      onUnhideItem={unhideItem}
+    />
   {/if}
 </main>
 
 <style>
   :global(:root) {
     font-family: -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
-    color: #1b1b1f;
-    background: rgba(246, 246, 248, 0.98);
+    color: var(--fg);
+    background: var(--bg);
+
+    --bg: rgba(246, 246, 248, 0.98);
+    --fg: #1b1b1f;
+    --fg-muted: rgba(27, 27, 31, 0.6);
+    --fg-muted-strong: rgba(27, 27, 31, 0.7);
+    --fg-subtle: rgba(27, 27, 31, 0.5);
+
+    --border: rgba(0, 0, 0, 0.15);
+    --border-subtle: rgba(0, 0, 0, 0.08);
+    --border-faint: rgba(0, 0, 0, 0.06);
+
+    --surface-1: rgba(0, 0, 0, 0.04);
+    --surface-2: rgba(0, 0, 0, 0.06);
+    --surface-2-hover: rgba(0, 0, 0, 0.1);
+    --hover-bg: rgba(0, 0, 0, 0.05);
+
+    --scrollbar-thumb: rgba(0, 0, 0, 0.22);
+    --scrollbar-thumb-hover: rgba(0, 0, 0, 0.35);
+
+    --accent: #0969da;
+    --accent-bg: rgba(9, 105, 218, 0.12);
+    --accent-bg-strong: rgba(9, 105, 218, 0.15);
+    --accent-bg-hover: rgba(9, 105, 218, 0.18);
+    --on-accent: white;
+
+    --success: #1a7f37;
+    --success-bg: rgba(26, 127, 55, 0.15);
+
+    --danger: #d1242f;
+    --danger-bg: rgba(209, 36, 47, 0.15);
+    --danger-bg-faint: rgba(209, 36, 47, 0.12);
+
+    --warning: #9a6700;
+    --warning-bg: rgba(154, 103, 0, 0.15);
+
+    --neutral: #57606a;
+    --neutral-bg: rgba(87, 96, 106, 0.15);
+    --neutral-bg-faint: rgba(87, 96, 106, 0.1);
+    --neutral-border: rgba(87, 96, 106, 0.45);
+    --neutral-dim: rgba(87, 96, 106, 0.7);
+  }
+
+  :global(:root[data-theme="dark"]) {
+    --bg: rgba(30, 30, 32, 0.98);
+    --fg: #ececef;
+    --fg-muted: rgba(236, 236, 239, 0.6);
+    --fg-muted-strong: rgba(236, 236, 239, 0.7);
+    --fg-subtle: rgba(236, 236, 239, 0.4);
+
+    --border: rgba(255, 255, 255, 0.15);
+    --border-subtle: rgba(255, 255, 255, 0.08);
+    --border-faint: rgba(255, 255, 255, 0.06);
+
+    --surface-1: rgba(255, 255, 255, 0.05);
+    --surface-2: rgba(255, 255, 255, 0.08);
+    --surface-2-hover: rgba(255, 255, 255, 0.14);
+    --hover-bg: rgba(255, 255, 255, 0.06);
+
+    --scrollbar-thumb: rgba(255, 255, 255, 0.2);
+    --scrollbar-thumb-hover: rgba(255, 255, 255, 0.32);
+
+    --accent: #58a6ff;
+    --accent-bg: rgba(88, 166, 255, 0.15);
+    --accent-bg-strong: rgba(88, 166, 255, 0.18);
+    --accent-bg-hover: rgba(88, 166, 255, 0.22);
+
+    --success: #3fb950;
+    --success-bg: rgba(46, 160, 67, 0.2);
+
+    --danger: #ff7b72;
+    --danger-bg: rgba(248, 81, 73, 0.2);
+    --danger-bg-faint: rgba(248, 81, 73, 0.2);
+
+    --warning: #d29922;
+    --warning-bg: rgba(187, 128, 9, 0.2);
+
+    --neutral: #8b949e;
+    --neutral-bg: rgba(139, 148, 158, 0.2);
+    --neutral-bg-faint: rgba(139, 148, 158, 0.12);
+    --neutral-border: rgba(139, 148, 158, 0.5);
+    --neutral-dim: rgba(139, 148, 158, 0.7);
   }
 
   :global(body) {
@@ -1556,7 +1269,7 @@
   :global(.list),
   :global(.settings) {
     scrollbar-width: thin;
-    scrollbar-color: rgba(0, 0, 0, 0.25) transparent;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
   }
 
   :global(.list::-webkit-scrollbar),
@@ -1571,7 +1284,7 @@
 
   :global(.list::-webkit-scrollbar-thumb),
   :global(.settings::-webkit-scrollbar-thumb) {
-    background-color: rgba(0, 0, 0, 0.2);
+    background-color: var(--scrollbar-thumb);
     border-radius: 4px;
     border: 2px solid transparent;
     background-clip: content-box;
@@ -1579,7 +1292,7 @@
 
   :global(.list::-webkit-scrollbar-thumb:hover),
   :global(.settings::-webkit-scrollbar-thumb:hover) {
-    background-color: rgba(0, 0, 0, 0.35);
+    background-color: var(--scrollbar-thumb-hover);
     background-clip: content-box;
   }
 
@@ -1615,7 +1328,7 @@
     top: 0;
     height: 100%;
     width: 30%;
-    background: #0969da;
+    background: var(--accent);
     animation: progress-slide 1.1s ease-in-out infinite;
   }
 
@@ -1628,27 +1341,27 @@
     }
   }
 
-  .list.dim {
+  :global(.list.dim) {
     opacity: 0.45;
     transition: opacity 0.15s;
   }
 
-  .toolbar {
+  :global(.toolbar) {
     display: flex;
     align-items: center;
     gap: 8px;
     padding-bottom: 8px;
     margin-bottom: 4px;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+    border-bottom: 1px solid var(--border-subtle);
   }
 
-  .toolbar .refresh {
+  :global(.toolbar .refresh) {
     flex: 1;
   }
 
-  .auth,
-  .device,
-  .empty {
+  :global(.auth),
+  :global(.device),
+  :global(.empty) {
     flex: 1;
     display: flex;
     flex-direction: column;
@@ -1686,37 +1399,37 @@
     }
   }
 
-  .settings {
+  :global(.settings) {
     flex: 1;
     display: flex;
     flex-direction: column;
     overflow-y: auto;
   }
 
-  .settings-header {
+  :global(.settings-header) {
     margin-bottom: 12px;
   }
 
-  .back {
+  :global(.back) {
     background: none;
     border: none;
     padding: 4px 0;
     font-size: 12px;
-    color: rgba(27, 27, 31, 0.6);
+    color: var(--fg-muted);
     cursor: pointer;
   }
 
-  .back:hover {
-    color: #0969da;
+  :global(.back:hover) {
+    color: var(--accent);
   }
 
-  .settings-body {
+  :global(.settings-body) {
     display: flex;
     flex-direction: column;
     gap: 12px;
   }
 
-  .setting-row {
+  :global(.setting-row) {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -1724,91 +1437,91 @@
     gap: 12px;
   }
 
-  .setting-label {
+  :global(.setting-label) {
     color: inherit;
   }
 
-  .setting-row select {
+  :global(.setting-row select) {
     font-size: 13px;
     padding: 4px 6px;
-    border: 1px solid rgba(0, 0, 0, 0.15);
+    border: 1px solid var(--border);
     border-radius: 5px;
-    background: white;
+    background: var(--surface-1);
     color: inherit;
   }
 
-  .setting-row input[type="checkbox"] {
+  :global(.setting-row input[type="checkbox"]) {
     width: 18px;
     height: 18px;
-    accent-color: #0969da;
+    accent-color: var(--accent);
   }
 
-  .setting-hint {
+  :global(.setting-hint) {
     margin: 8px 0 0;
     font-size: 11px;
-    color: rgba(27, 27, 31, 0.55);
+    color: var(--fg-muted);
   }
 
-  .setting-hint kbd {
+  :global(.setting-hint kbd) {
     font-family: "SF Mono", Menlo, monospace;
     font-size: 10px;
     padding: 1px 4px;
-    border: 1px solid rgba(0, 0, 0, 0.15);
+    border: 1px solid var(--border);
     border-radius: 3px;
-    background: rgba(0, 0, 0, 0.04);
+    background: var(--surface-1);
   }
 
-  .shortcut-capture {
+  :global(.shortcut-capture) {
     font-family: "SF Mono", Menlo, monospace;
     font-size: 12px;
     padding: 4px 10px;
-    border: 1px solid rgba(0, 0, 0, 0.15);
+    border: 1px solid var(--border);
     border-radius: 5px;
-    background: rgba(0, 0, 0, 0.04);
+    background: var(--surface-1);
     color: inherit;
     cursor: pointer;
   }
 
-  .shortcut-capture.capturing {
-    background: rgba(9, 105, 218, 0.15);
-    border-color: #0969da;
-    color: #0969da;
+  :global(.shortcut-capture.capturing) {
+    background: var(--accent-bg-strong);
+    border-color: var(--accent);
+    color: var(--accent);
   }
 
-  .setting-hint-inline {
+  :global(.setting-hint-inline) {
     font-size: 11px;
-    color: rgba(27, 27, 31, 0.55);
+    color: var(--fg-muted);
     margin-left: 4px;
   }
 
-  .setting-hint-inline.update-available {
-    color: #1a7f37;
+  :global(.setting-hint-inline.update-available) {
+    color: var(--success);
     font-weight: 500;
   }
 
-  .setting-hint-inline.error-inline {
-    color: #d1242f;
+  :global(.setting-hint-inline.error-inline) {
+    color: var(--danger);
   }
 
-  .setting-section {
+  :global(.setting-section) {
     display: flex;
     flex-direction: column;
     gap: 6px;
     padding-top: 8px;
-    border-top: 1px solid rgba(0, 0, 0, 0.06);
+    border-top: 1px solid var(--border-faint);
   }
 
-  .setting-buttons {
+  :global(.setting-buttons) {
     display: flex;
     gap: 8px;
   }
 
-  .setting-hint.io-path {
+  :global(.setting-hint.io-path) {
     font-family: "SF Mono", Menlo, monospace;
     word-break: break-all;
   }
 
-  .excluded-list {
+  :global(.excluded-list) {
     list-style: none;
     margin: 0;
     padding: 0;
@@ -1817,115 +1530,115 @@
     gap: 2px;
   }
 
-  .excluded-list li {
+  :global(.excluded-list li) {
     display: flex;
     align-items: center;
     padding: 4px 6px;
     font-size: 12px;
     border-radius: 5px;
-    background: rgba(0, 0, 0, 0.04);
+    background: var(--surface-1);
   }
 
-  .excluded-list .row-action {
+  :global(.excluded-list .row-action) {
     visibility: visible;
     pointer-events: auto;
     opacity: 0.6;
   }
 
-  .excluded-list li:hover .row-action {
+  :global(.excluded-list li:hover .row-action) {
     opacity: 1;
   }
 
-  .excluded-repo {
+  :global(.excluded-repo) {
     flex: 1;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .excluded-add {
+  :global(.excluded-add) {
     display: flex;
     gap: 6px;
   }
 
-  .excluded-add input {
+  :global(.excluded-add input) {
     flex: 1;
     padding: 4px 6px;
     font-size: 12px;
-    border: 1px solid rgba(0, 0, 0, 0.15);
+    border: 1px solid var(--border);
     border-radius: 5px;
-    background: white;
+    background: var(--surface-1);
     color: inherit;
     min-width: 0;
   }
 
-  .icon-btn {
+  :global(.icon-btn) {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     padding: 8px 10px;
     border: none;
     border-radius: 6px;
-    background: rgba(0, 0, 0, 0.05);
+    background: var(--surface-2);
     color: inherit;
     cursor: pointer;
     line-height: 1;
   }
 
-  .icon-btn:hover {
-    background: rgba(0, 0, 0, 0.1);
+  :global(.icon-btn:hover) {
+    background: var(--surface-2-hover);
   }
 
-  .icon-btn svg {
+  :global(.icon-btn svg) {
     width: 16px;
     height: 16px;
     display: block;
   }
 
-  .hint {
+  :global(.hint) {
     margin: 0;
     font-size: 13px;
-    color: rgba(27, 27, 31, 0.7);
+    color: var(--fg-muted-strong);
   }
 
-  .waiting {
+  :global(.waiting) {
     margin: 0;
     font-size: 12px;
-    color: rgba(27, 27, 31, 0.5);
+    color: var(--fg-subtle);
   }
 
-  .code {
+  :global(.code) {
     font-family: "SF Mono", Menlo, monospace;
     font-size: 26px;
     letter-spacing: 4px;
     font-weight: 600;
-    background: rgba(0, 0, 0, 0.05);
-    border: 1px dashed rgba(0, 0, 0, 0.2);
+    background: var(--surface-2);
+    border: 1px dashed var(--border);
     border-radius: 8px;
     padding: 12px 18px;
     color: inherit;
     cursor: pointer;
   }
 
-  .code:hover {
-    background: rgba(0, 0, 0, 0.08);
+  :global(.code:hover) {
+    background: var(--surface-2-hover);
   }
 
-  .copy-status {
+  :global(.copy-status) {
     margin: -6px 0 0;
     font-size: 11px;
-    color: rgba(27, 27, 31, 0.5);
+    color: var(--fg-subtle);
   }
 
-  .copy-status.ok {
-    color: #1a7f37;
+  :global(.copy-status.ok) {
+    color: var(--success);
     font-weight: 500;
   }
 
-  button.primary,
-  button.secondary,
-  button.refresh,
-  button.signout {
+  :global(button.primary),
+  :global(button.secondary),
+  :global(button.refresh),
+  :global(button.signout) {
     padding: 8px 14px;
     font-size: 13px;
     border: none;
@@ -1933,47 +1646,47 @@
     cursor: pointer;
   }
 
-  .primary,
-  .refresh {
-    background: #0969da;
-    color: white;
+  :global(.primary),
+  :global(.refresh) {
+    background: var(--accent);
+    color: var(--on-accent);
   }
 
-  .secondary {
-    background: rgba(0, 0, 0, 0.06);
+  :global(.secondary) {
+    background: var(--surface-2);
     color: inherit;
   }
 
-  .signout {
-    background: rgba(0, 0, 0, 0.05);
+  :global(.signout) {
+    background: var(--surface-2);
     color: inherit;
   }
 
-  .signout:hover {
-    background: rgba(209, 36, 47, 0.12);
-    color: #d1242f;
+  :global(.signout:hover) {
+    background: var(--danger-bg-faint);
+    color: var(--danger);
   }
 
-  .refresh:disabled {
+  :global(.refresh:disabled) {
     opacity: 0.5;
     cursor: default;
   }
 
-  .error {
+  :global(.error) {
     margin: 0;
     font-size: 12px;
-    color: #d1242f;
+    color: var(--danger);
   }
 
-  .tabs {
+  :global(.tabs) {
     display: flex;
     gap: 4px;
     padding: 0 0 8px;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+    border-bottom: 1px solid var(--border-subtle);
     margin-bottom: 8px;
   }
 
-  .tab {
+  :global(.tab) {
     flex: 1;
     padding: 4px 8px;
     font-size: 11px;
@@ -1981,20 +1694,20 @@
     border: none;
     border-radius: 5px;
     background: none;
-    color: rgba(27, 27, 31, 0.6);
+    color: var(--fg-muted);
     cursor: pointer;
   }
 
-  .tab:hover {
-    background: rgba(0, 0, 0, 0.05);
+  :global(.tab:hover) {
+    background: var(--hover-bg);
   }
 
-  .tab.active {
-    background: rgba(9, 105, 218, 0.12);
-    color: #0969da;
+  :global(.tab.active) {
+    background: var(--accent-bg);
+    color: var(--accent);
   }
 
-  .list {
+  :global(.list) {
     flex: 1;
     overflow-y: auto;
     list-style: none;
@@ -2002,11 +1715,11 @@
     padding: 0;
   }
 
-  .group {
+  :global(.group) {
     margin-bottom: 4px;
   }
 
-  .group-header {
+  :global(.group-header) {
     position: sticky;
     top: 0;
     z-index: 1;
@@ -2016,29 +1729,29 @@
     padding: 6px 8px 4px;
     font-size: 11px;
     font-weight: 600;
-    color: rgba(27, 27, 31, 0.55);
-    background: rgba(246, 246, 248, 0.98);
+    color: var(--fg-muted);
+    background: var(--bg);
     backdrop-filter: blur(8px);
   }
 
-  .group-repo {
+  :global(.group-repo) {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .group-count {
+  :global(.group-count) {
     flex-shrink: 0;
     margin-left: 8px;
     padding: 1px 6px;
     font-size: 10px;
     font-weight: 600;
-    color: white;
-    background: #0969da;
+    color: var(--on-accent);
+    background: var(--accent);
     border-radius: 8px;
   }
 
-  .group-items {
+  :global(.group-items) {
     list-style: none;
     margin: 0;
     padding: 0;
@@ -2047,13 +1760,13 @@
     gap: 8px;
   }
 
-  .item-row {
+  :global(.item-row) {
     display: flex;
     align-items: stretch;
     gap: 2px;
   }
 
-  .item {
+  :global(.item) {
     flex: 1;
     min-width: 0;
     display: flex;
@@ -2068,7 +1781,7 @@
     color: inherit;
   }
 
-  .row-action {
+  :global(.row-action) {
     flex-shrink: 0;
     width: 24px;
     padding: 0;
@@ -2076,7 +1789,7 @@
     border: none;
     border-radius: 6px;
     font-size: 14px;
-    color: rgba(27, 27, 31, 0.5);
+    color: var(--fg-subtle);
     cursor: pointer;
     /* No fade transition: with a transition, a row that loses hover
        briefly overlaps a row that gains it, and several "×" glyphs
@@ -2085,85 +1798,85 @@
     pointer-events: none;
   }
 
-  .item-row:hover .row-action {
+  :global(.item-row:hover .row-action) {
     visibility: visible;
     pointer-events: auto;
   }
 
-  .row-action:hover {
-    color: #d1242f;
-    background: rgba(0, 0, 0, 0.05);
+  :global(.row-action:hover) {
+    color: var(--danger);
+    background: var(--hover-bg);
   }
 
-  .item:hover {
-    background: rgba(0, 0, 0, 0.05);
+  :global(.item:hover) {
+    background: var(--hover-bg);
   }
 
-  .item.selected {
-    background: rgba(9, 105, 218, 0.12);
+  :global(.item.selected) {
+    background: var(--accent-bg);
   }
 
-  .item.selected:hover {
-    background: rgba(9, 105, 218, 0.18);
+  :global(.item.selected:hover) {
+    background: var(--accent-bg-hover);
   }
 
-  .item.draft .title-text,
-  .item.draft .meta,
-  .item.draft .badge {
+  :global(.item.draft .title-text),
+  :global(.item.draft .meta),
+  :global(.item.draft .badge) {
     opacity: 0.55;
   }
 
-  .draft-label {
+  :global(.draft-label) {
     display: inline-block;
     padding: 0 5px;
     margin-right: 6px;
     font-size: 9px;
     font-weight: 700;
     letter-spacing: 0.5px;
-    color: #57606a;
-    background: rgba(87, 96, 106, 0.15);
-    border: 1px solid rgba(87, 96, 106, 0.45);
+    color: var(--neutral);
+    background: var(--neutral-bg);
+    border: 1px solid var(--neutral-border);
     border-radius: 3px;
     vertical-align: 1px;
   }
 
-  .item.unread .title-text {
+  :global(.item.unread .title-text) {
     font-weight: 600;
   }
 
-  .item.unread::before {
+  :global(.item.unread::before) {
     content: "";
     width: 6px;
     height: 6px;
     border-radius: 50%;
-    background: #0969da;
+    background: var(--accent);
     margin-top: 6px;
     flex-shrink: 0;
   }
 
-  .item:not(.unread)::before {
+  :global(.item:not(.unread)::before) {
     content: "";
     width: 6px;
     flex-shrink: 0;
   }
 
-  .badge {
+  :global(.badge) {
     flex: 0 0 auto;
     font-size: 10px;
     font-weight: 600;
     padding: 2px 5px;
     border-radius: 3px;
-    background: rgba(154, 103, 0, 0.15);
-    color: #9a6700;
+    background: var(--warning-bg);
+    color: var(--warning);
     margin-top: 1px;
   }
 
-  .badge.pr {
-    background: rgba(26, 127, 55, 0.15);
-    color: #1a7f37;
+  :global(.badge.pr) {
+    background: var(--success-bg);
+    color: var(--success);
   }
 
-  .body {
+  :global(.body) {
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -2171,7 +1884,7 @@
     flex: 1;
   }
 
-  .title {
+  :global(.title) {
     font-size: 13px;
     line-height: 1.3;
     overflow: hidden;
@@ -2182,9 +1895,9 @@
     -webkit-box-orient: vertical;
   }
 
-  .meta {
+  :global(.meta) {
     font-size: 11px;
-    color: rgba(27, 27, 31, 0.55);
+    color: var(--fg-muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -2194,57 +1907,57 @@
     min-width: 0;
   }
 
-  .avatar {
+  :global(.avatar) {
     width: 14px;
     height: 14px;
     border-radius: 50%;
     flex-shrink: 0;
-    background: rgba(0, 0, 0, 0.05);
+    background: var(--hover-bg);
   }
 
-  .author {
+  :global(.author) {
     overflow: hidden;
     text-overflow: ellipsis;
     flex-shrink: 1;
     min-width: 0;
   }
 
-  .sep {
+  :global(.sep) {
     flex-shrink: 0;
     opacity: 0.6;
   }
 
-  .comments {
+  :global(.comments) {
     flex-shrink: 0;
     font-variant-numeric: tabular-nums;
   }
 
-  .ci {
+  :global(.ci) {
     flex-shrink: 0;
     font-weight: 600;
   }
 
-  .ci-success {
-    color: #1a7f37;
+  :global(.ci-success) {
+    color: var(--success);
   }
 
-  .ci-failure,
-  .ci-error {
-    color: #d1242f;
+  :global(.ci-failure),
+  :global(.ci-error) {
+    color: var(--danger);
   }
 
-  .ci-pending {
-    color: #9a6700;
+  :global(.ci-pending) {
+    color: var(--warning);
   }
 
-  .reviewers {
+  :global(.reviewers) {
     display: flex;
     gap: 4px;
     margin-top: 4px;
     flex-wrap: wrap;
   }
 
-  .reviewer-chip {
+  :global(.reviewer-chip) {
     display: inline-flex;
     align-items: center;
     gap: 4px;
@@ -2256,63 +1969,63 @@
     min-width: 0;
   }
 
-  .reviewer-chip-avatar {
+  :global(.reviewer-chip-avatar) {
     width: 14px;
     height: 14px;
     border-radius: 50%;
     flex-shrink: 0;
   }
 
-  .reviewer-chip-name {
+  :global(.reviewer-chip-name) {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     min-width: 0;
   }
 
-  .reviewer-chip-state {
+  :global(.reviewer-chip-state) {
     flex-shrink: 0;
     opacity: 0.8;
     font-weight: 400;
   }
 
-  .reviewer-approved {
-    background: rgba(26, 127, 55, 0.15);
-    color: #1a7f37;
+  :global(.reviewer-approved) {
+    background: var(--success-bg);
+    color: var(--success);
   }
 
-  .reviewer-changes_requested {
-    background: rgba(209, 36, 47, 0.15);
-    color: #d1242f;
+  :global(.reviewer-changes_requested) {
+    background: var(--danger-bg);
+    color: var(--danger);
   }
 
-  .reviewer-pending {
-    background: rgba(154, 103, 0, 0.15);
-    color: #9a6700;
+  :global(.reviewer-pending) {
+    background: var(--warning-bg);
+    color: var(--warning);
   }
 
-  .reviewer-commented {
-    background: rgba(87, 96, 106, 0.15);
-    color: #57606a;
+  :global(.reviewer-commented) {
+    background: var(--neutral-bg);
+    color: var(--neutral);
   }
 
-  .reviewer-dismissed {
-    background: rgba(87, 96, 106, 0.1);
-    color: rgba(87, 96, 106, 0.7);
+  :global(.reviewer-dismissed) {
+    background: var(--neutral-bg-faint);
+    color: var(--neutral-dim);
   }
 
-  .reviewer-dismissed .reviewer-chip-name {
+  :global(.reviewer-dismissed .reviewer-chip-name) {
     text-decoration: line-through;
   }
 
-  .commenters {
+  :global(.commenters) {
     display: flex;
     gap: 4px;
     margin-top: 4px;
     flex-wrap: wrap;
   }
 
-  .commenter-chip {
+  :global(.commenter-chip) {
     display: inline-flex;
     align-items: center;
     gap: 4px;
@@ -2322,167 +2035,21 @@
     font-weight: 500;
     max-width: 100%;
     min-width: 0;
-    background: rgba(87, 96, 106, 0.15);
-    color: #57606a;
+    background: var(--neutral-bg);
+    color: var(--neutral);
   }
 
-  .commenter-chip-avatar {
+  :global(.commenter-chip-avatar) {
     width: 14px;
     height: 14px;
     border-radius: 50%;
     flex-shrink: 0;
   }
 
-  .commenter-chip-name {
+  :global(.commenter-chip-name) {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
     min-width: 0;
-  }
-
-  @media (prefers-color-scheme: dark) {
-    :global(:root) {
-      color: #ececef;
-      background: rgba(30, 30, 32, 0.98);
-    }
-    .toolbar,
-    .tabs {
-      border-color: rgba(255, 255, 255, 0.08);
-    }
-    .tab {
-      color: rgba(236, 236, 239, 0.6);
-    }
-    .tab:hover {
-      background: rgba(255, 255, 255, 0.06);
-    }
-    .tab.active {
-      background: rgba(9, 105, 218, 0.2);
-      color: #58a6ff;
-    }
-    .meta,
-    .hint,
-    .waiting,
-    .group-header,
-    .back,
-    .setting-hint,
-    .setting-hint-inline {
-      color: rgba(236, 236, 239, 0.6);
-    }
-    .signout {
-      background: rgba(255, 255, 255, 0.08);
-      color: inherit;
-    }
-    .signout:hover {
-      background: rgba(248, 81, 73, 0.2);
-      color: #ff7b72;
-    }
-    .setting-hint-inline.update-available {
-      color: #3fb950;
-    }
-    .setting-hint-inline.error-inline {
-      color: #ff7b72;
-    }
-    .group-header {
-      background: rgba(30, 30, 32, 0.98);
-    }
-    .code {
-      background: rgba(255, 255, 255, 0.05);
-      border-color: rgba(255, 255, 255, 0.15);
-    }
-    .code:hover {
-      background: rgba(255, 255, 255, 0.08);
-    }
-    .secondary {
-      background: rgba(255, 255, 255, 0.08);
-    }
-    .item:hover {
-      background: rgba(255, 255, 255, 0.06);
-    }
-    .setting-row select {
-      background: rgba(255, 255, 255, 0.05);
-      border-color: rgba(255, 255, 255, 0.15);
-    }
-    .setting-hint kbd {
-      background: rgba(255, 255, 255, 0.06);
-      border-color: rgba(255, 255, 255, 0.15);
-    }
-    .icon-btn {
-      background: rgba(255, 255, 255, 0.08);
-    }
-    .icon-btn:hover {
-      background: rgba(255, 255, 255, 0.14);
-    }
-    .reviewer-approved {
-      background: rgba(46, 160, 67, 0.2);
-      color: #3fb950;
-    }
-    .reviewer-changes_requested {
-      background: rgba(248, 81, 73, 0.2);
-      color: #ff7b72;
-    }
-    .reviewer-pending {
-      background: rgba(187, 128, 9, 0.2);
-      color: #d29922;
-    }
-    .reviewer-commented {
-      background: rgba(139, 148, 158, 0.2);
-      color: #8b949e;
-    }
-    .reviewer-dismissed {
-      background: rgba(139, 148, 158, 0.12);
-      color: rgba(139, 148, 158, 0.7);
-    }
-    .commenter-chip {
-      background: rgba(139, 148, 158, 0.2);
-      color: #8b949e;
-    }
-    .row-action {
-      color: rgba(236, 236, 239, 0.4);
-    }
-    .row-action:hover {
-      background: rgba(255, 255, 255, 0.08);
-    }
-    .setting-section {
-      border-top-color: rgba(255, 255, 255, 0.06);
-    }
-    .excluded-list li {
-      background: rgba(255, 255, 255, 0.05);
-    }
-    .excluded-add input {
-      background: rgba(255, 255, 255, 0.05);
-      border-color: rgba(255, 255, 255, 0.15);
-    }
-    .shortcut-capture {
-      background: rgba(255, 255, 255, 0.06);
-      border-color: rgba(255, 255, 255, 0.15);
-    }
-    .shortcut-capture.capturing {
-      background: rgba(88, 166, 255, 0.18);
-      border-color: #58a6ff;
-      color: #58a6ff;
-    }
-    .item.selected {
-      background: rgba(88, 166, 255, 0.15);
-    }
-    .item.selected:hover {
-      background: rgba(88, 166, 255, 0.22);
-    }
-    .draft-label {
-      color: #8b949e;
-      background: rgba(139, 148, 158, 0.18);
-      border-color: rgba(139, 148, 158, 0.5);
-    }
-    :global(.list),
-    :global(.settings) {
-      scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
-    }
-    :global(.list::-webkit-scrollbar-thumb),
-    :global(.settings::-webkit-scrollbar-thumb) {
-      background-color: rgba(255, 255, 255, 0.18);
-    }
-    :global(.list::-webkit-scrollbar-thumb:hover),
-    :global(.settings::-webkit-scrollbar-thumb:hover) {
-      background-color: rgba(255, 255, 255, 0.32);
-    }
   }
 </style>
