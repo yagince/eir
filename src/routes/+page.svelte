@@ -550,17 +550,18 @@
 
   onMount(async () => {
     window.addEventListener("keydown", handleGlobalKey);
+    // Reset list scroll on show, not on hide: a scroll-reset issued while
+    // the popup is hidden gets overridden by the webview's scroll
+    // restoration when it's shown again.
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     // When the popup is hidden (focus loss or tray re-click), Settings is
-    // treated as transient: reopening should land back on the list scrolled
-    // to the top with the first item selected, so a fresh open feels like a
-    // fresh glance.
+    // treated as transient: reopening should land back on the list with
+    // the first item selected, so a fresh open feels like a fresh glance.
     void listen("popup-hidden", () => {
       showingSettings = false;
       // Clear selection so the $effect picks flatItems[0] on next render;
       // this also snaps keyboard nav back to the top.
       selectedId = null;
-      const list = document.querySelector<HTMLElement>(".list");
-      if (list) list.scrollTop = 0;
     }).then((fn) => {
       unlistenPopupHidden = fn;
     });
@@ -589,9 +590,16 @@
   onDestroy(() => {
     stopRefresh();
     window.removeEventListener("keydown", handleGlobalKey);
+    document.removeEventListener("visibilitychange", handleVisibilityChange);
     unlistenPopupHidden?.();
     unlistenPopupHidden = null;
   });
+
+  function handleVisibilityChange() {
+    if (document.visibilityState !== "visible") return;
+    const list = document.querySelector<HTMLElement>(".list");
+    if (list) list.scrollTop = 0;
+  }
 
   function formatShortcut(e: KeyboardEvent): string | null {
     if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) return null;
