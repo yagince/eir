@@ -1,5 +1,6 @@
 mod auth;
 mod github;
+mod settings_io;
 mod shortcut;
 mod tray;
 
@@ -54,6 +55,8 @@ pub fn run() {
             tray::set_tray_badge,
             shortcut::get_toggle_shortcut,
             shortcut::set_toggle_shortcut,
+            settings_io::write_text_file,
+            settings_io::read_text_file,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
