@@ -9,7 +9,7 @@
   } from "@tauri-apps/plugin-notification";
   import { check as checkForUpdate, Update } from "@tauri-apps/plugin-updater";
   import { relaunch } from "@tauri-apps/plugin-process";
-  import { ask, message } from "@tauri-apps/plugin-dialog";
+  import { ask, message, open, save } from "@tauri-apps/plugin-dialog";
   import {
     disable as disableAutostart,
     enable as enableAutostart,
@@ -106,6 +106,8 @@
   const watchedOrgs = new SvelteSet<string>(loadWatchedOrgs());
   let newExcludedRepo = $state("");
   let newWatchedOrg = $state("");
+  let settingsIoError = $state<string | null>(null);
+  let settingsIoNotice = $state<string | null>(null);
 
   let prevThreads = new Map<number, string>();
   let prevItems = new Map<number, WatchedItem>();
@@ -856,6 +858,151 @@
     await loadItems();
   }
 
+  const SETTINGS_EXPORT_VERSION = 1;
+
+  type SettingsExport = {
+    version: number;
+    refreshMs?: number;
+    notifyEnabled?: boolean;
+    excludedRepos?: string[];
+    watchedOrgs?: string[];
+    hiddenItems?: number[];
+    toggleShortcut?: string;
+  };
+
+  function buildSettingsExport(): SettingsExport {
+    return {
+      version: SETTINGS_EXPORT_VERSION,
+      refreshMs,
+      notifyEnabled,
+      excludedRepos: [...excludedRepos].sort(),
+      watchedOrgs: [...watchedOrgs].sort(),
+      hiddenItems: [...hiddenItems].sort((a, b) => a - b),
+      toggleShortcut,
+    };
+  }
+
+  async function exportSettings() {
+    settingsIoError = null;
+    settingsIoNotice = null;
+    await withPinnedWindow(async () => {
+      try {
+        const stamp = new Date().toISOString().slice(0, 10);
+        const path = await save({
+          title: "Export eir settings",
+          defaultPath: `eir-settings-${stamp}.json`,
+          filters: [{ name: "JSON", extensions: ["json"] }],
+        });
+        if (!path) return;
+        const payload = JSON.stringify(buildSettingsExport(), null, 2);
+        const written = await invoke<string>("write_text_file", {
+          path,
+          contents: payload,
+        });
+        settingsIoNotice = `Saved to ${written}`;
+      } catch (err) {
+        settingsIoError = `Export failed: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    });
+  }
+
+  async function importSettings() {
+    settingsIoError = null;
+    settingsIoNotice = null;
+    await withPinnedWindow(async () => {
+      try {
+        const selected = await open({
+          title: "Import eir settings",
+          multiple: false,
+          directory: false,
+          filters: [{ name: "JSON", extensions: ["json"] }],
+        });
+        if (!selected || typeof selected !== "string") return;
+        const text = await invoke<string>("read_text_file", { path: selected });
+        const parsed = JSON.parse(text) as unknown;
+        applyImportedSettings(parsed, selected);
+      } catch (err) {
+        settingsIoError = `Import failed: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    });
+  }
+
+  function applyImportedSettings(raw: unknown, sourcePath?: string) {
+    if (!raw || typeof raw !== "object") {
+      throw new Error("not a JSON object");
+    }
+    const data = raw as Partial<SettingsExport>;
+    if (data.version !== SETTINGS_EXPORT_VERSION) {
+      throw new Error(
+        `unsupported version: ${data.version ?? "missing"} (expected ${SETTINGS_EXPORT_VERSION})`,
+      );
+    }
+
+    const applied: string[] = [];
+
+    if (typeof data.refreshMs === "number" && data.refreshMs >= 5_000) {
+      onIntervalChange(data.refreshMs);
+      applied.push("refresh interval");
+    }
+
+    if (typeof data.notifyEnabled === "boolean") {
+      onNotifyChange(data.notifyEnabled);
+      applied.push("notifications");
+    }
+
+    if (Array.isArray(data.excludedRepos)) {
+      const next = data.excludedRepos.filter(
+        (r): r is string => typeof r === "string" && r.includes("/"),
+      );
+      excludedRepos.clear();
+      for (const r of next) excludedRepos.add(r);
+      persistExcludedRepos();
+      applied.push("excluded repos");
+    }
+
+    if (Array.isArray(data.watchedOrgs)) {
+      const next = data.watchedOrgs.filter(
+        (o): o is string => typeof o === "string" && o.length > 0,
+      );
+      watchedOrgs.clear();
+      for (const o of next) watchedOrgs.add(o);
+      persistWatchedOrgs();
+      applied.push("watched orgs");
+    }
+
+    if (Array.isArray(data.hiddenItems)) {
+      const next = data.hiddenItems.filter(
+        (n): n is number => typeof n === "number" && Number.isFinite(n),
+      );
+      hiddenItems.clear();
+      for (const n of next) hiddenItems.add(n);
+      persistHiddenItems();
+      applied.push("hidden items");
+    }
+
+    if (typeof data.toggleShortcut === "string" && data.toggleShortcut) {
+      void invoke("set_toggle_shortcut", { shortcut: data.toggleShortcut })
+        .then(() => {
+          toggleShortcut = data.toggleShortcut as string;
+        })
+        .catch((err) => {
+          console.warn("[eir] import: shortcut rejected:", err);
+        });
+      applied.push("toggle shortcut");
+    }
+
+    updateBadge();
+    // Re-fetch so excluded-repo/watched-org changes hit the server query.
+    void loadItems({ silent: true });
+
+    settingsIoError = null;
+    const suffix = sourcePath ? ` from ${sourcePath}` : "";
+    settingsIoNotice =
+      applied.length > 0
+        ? `Imported ${applied.join(", ")}${suffix}.`
+        : `Nothing to import${suffix}.`;
+  }
+
   const repoSuggestions = $derived(
     repoSuggestionsFrom(items, excludedRepos),
   );
@@ -1109,6 +1256,27 @@
             </datalist>
             <button class="secondary" onclick={addExcludedRepo}>Add</button>
           </div>
+        </div>
+
+        <div class="setting-section">
+          <span class="setting-label">Backup settings</span>
+          <p class="setting-hint">
+            Export your configuration (refresh interval, notifications,
+            watched orgs, excluded repos, hidden items, shortcut) as a JSON
+            file, or import a previously saved file to restore it.
+          </p>
+          <div class="setting-buttons">
+            <button class="secondary" onclick={exportSettings}>Export</button>
+            <button class="secondary" onclick={importSettings}>Import</button>
+          </div>
+          {#if settingsIoNotice}
+            <p class="setting-hint io-path" title={settingsIoNotice}>
+              {settingsIoNotice}
+            </p>
+          {/if}
+          {#if settingsIoError}
+            <p class="error">{settingsIoError}</p>
+          {/if}
         </div>
 
         <p class="setting-hint">
@@ -1569,6 +1737,16 @@
     gap: 6px;
     padding-top: 8px;
     border-top: 1px solid rgba(0, 0, 0, 0.06);
+  }
+
+  .setting-buttons {
+    display: flex;
+    gap: 8px;
+  }
+
+  .setting-hint.io-path {
+    font-family: "SF Mono", Menlo, monospace;
+    word-break: break-all;
   }
 
   .excluded-list {
