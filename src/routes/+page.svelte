@@ -852,6 +852,7 @@
     version: number;
     refreshMs?: number;
     notifyEnabled?: boolean;
+    theme?: Theme;
     excludedRepos?: string[];
     watchedOrgs?: string[];
     hiddenItems?: number[];
@@ -863,6 +864,7 @@
       version: SETTINGS_EXPORT_VERSION,
       refreshMs,
       notifyEnabled,
+      theme,
       excludedRepos: [...excludedRepos].sort(),
       watchedOrgs: [...watchedOrgs].sort(),
       hiddenItems: [...hiddenItems].sort((a, b) => a - b),
@@ -936,6 +938,15 @@
     if (typeof data.notifyEnabled === "boolean") {
       onNotifyChange(data.notifyEnabled);
       applied.push("notifications");
+    }
+
+    if (
+      data.theme === "system" ||
+      data.theme === "light" ||
+      data.theme === "dark"
+    ) {
+      onThemeChange(data.theme);
+      applied.push("theme");
     }
 
     if (Array.isArray(data.excludedRepos)) {
