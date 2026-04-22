@@ -32,6 +32,7 @@
     loadPinnedItems,
     loadTab,
     loadTheme,
+    loadUnreadOnly,
     loadWatchedOrgs,
     persistExcludedRepos,
     persistHiddenItems,
@@ -40,6 +41,7 @@
     persistPinnedItems,
     persistTab,
     persistTheme,
+    persistUnreadOnly,
     persistWatchedOrgs,
     type Theme,
   } from "$lib/storage";
@@ -98,6 +100,7 @@
   let selectedId = $state<number | null>(null);
   let searchQuery = $state("");
   let searchVisible = $state(false);
+  let unreadOnly = $state<boolean>(loadUnreadOnly());
 
   // The notification plugin's sendNotification() just invokes
   // `new window.Notification(title, options)` under the hood and throws away
@@ -738,6 +741,11 @@
     await pushBackgroundConfig({ watchedOrgs: [...watchedOrgs] });
   }
 
+  function toggleUnreadOnly() {
+    unreadOnly = !unreadOnly;
+    persistUnreadOnly(unreadOnly);
+  }
+
   async function switchTab(tab: Tab) {
     if (tab === activeTab) return;
     activeTab = tab;
@@ -929,16 +937,18 @@
     return [...seen].sort();
   });
 
-  const visibleItems = $derived(
-    filterBySearch(
+  const visibleItems = $derived.by(() => {
+    const base = filterBySearch(
       filterVisible(items, {
         tab: activeTab,
         excludedRepos,
         hiddenItems,
       }),
       searchQuery,
-    ),
-  );
+    );
+    if (!unreadOnly) return base;
+    return base.filter((i) => notificationsByKey.has(itemKey(i)));
+  });
 
   const visibleUnreadCount = $derived(
     visibleItems.filter((i) => notificationsByKey.has(itemKey(i))).length,
@@ -1112,6 +1122,7 @@
       tabs={TABS}
       {error}
       {searchVisible}
+      {unreadOnly}
       bind:searchQuery
       onRefresh={triggerRefresh}
       onMarkAllVisibleAsRead={markAllVisibleAsRead}
@@ -1124,6 +1135,7 @@
       onTogglePin={togglePin}
       onClearSearch={clearSearch}
       onCloseSearch={closeSearch}
+      onToggleUnreadOnly={toggleUnreadOnly}
     />
   {/if}
 </main>

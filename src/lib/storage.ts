@@ -8,6 +8,7 @@ export const HIDDEN_ITEMS_KEY = "eir.hiddenItems";
 export const PINNED_ITEMS_KEY = "eir.pinnedItems";
 export const WATCHED_ORGS_KEY = "eir.watchedOrgs";
 export const THEME_KEY = "eir.theme";
+export const UNREAD_ONLY_KEY = "eir.unreadOnly";
 
 export const DEFAULT_REFRESH_MS = 60_000;
 
@@ -108,4 +109,12 @@ export function loadWatchedOrgs(): string[] {
 
 export function persistWatchedOrgs(values: Iterable<string>): void {
   localStorage.setItem(WATCHED_ORGS_KEY, JSON.stringify([...values]));
+}
+
+export function loadUnreadOnly(): boolean {
+  return localStorage.getItem(UNREAD_ONLY_KEY) === "1";
+}
+
+export function persistUnreadOnly(enabled: boolean): void {
+  localStorage.setItem(UNREAD_ONLY_KEY, enabled ? "1" : "0");
 }

@@ -20,6 +20,7 @@
     error: string | null;
     searchQuery: string;
     searchVisible: boolean;
+    unreadOnly: boolean;
     onRefresh: () => void;
     onMarkAllVisibleAsRead: () => void;
     onShowSettings: () => void;
@@ -31,6 +32,7 @@
     onTogglePin: (id: number) => void;
     onClearSearch: () => void;
     onCloseSearch: () => void;
+    onToggleUnreadOnly: () => void;
   };
 
   let {
@@ -46,6 +48,7 @@
     error,
     searchQuery = $bindable(),
     searchVisible,
+    unreadOnly,
     onRefresh,
     onMarkAllVisibleAsRead,
     onShowSettings,
@@ -57,6 +60,7 @@
     onTogglePin,
     onClearSearch,
     onCloseSearch,
+    onToggleUnreadOnly,
   }: Props = $props();
 
   function onSearchKeyDown(e: KeyboardEvent) {
@@ -136,6 +140,21 @@
     </button>
   {/each}
 </nav>
+<div class="filters">
+  <button
+    class="filter-chip"
+    class:active={unreadOnly}
+    onclick={onToggleUnreadOnly}
+    aria-pressed={unreadOnly}
+    title={unreadOnly ? "Showing unread only — click to show all" : "Show only unread items"}
+  >
+    <span class="filter-dot" aria-hidden="true"></span>
+    <span class="filter-label">Unread only</span>
+    {#if unreadOnly}
+      <span class="filter-x" aria-hidden="true">×</span>
+    {/if}
+  </button>
+</div>
 {#if searchVisible || searchQuery !== ""}
   <div class="search" class:active={searchQuery !== ""}>
     <svg
@@ -175,6 +194,8 @@
   <section class="empty">
     {#if searchQuery !== ""}
       <p>No matches for "{searchQuery}".</p>
+    {:else if unreadOnly}
+      <p>No unread items.</p>
     {:else}
       <p>Nothing here.</p>
     {/if}
@@ -388,6 +409,56 @@
     width: 16px;
     height: 16px;
     display: block;
+  }
+
+  .filters {
+    display: flex;
+    gap: 6px;
+    padding: 0 0 8px;
+    margin-bottom: 4px;
+  }
+
+  .filter-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    background: none;
+    color: var(--fg-muted);
+    cursor: pointer;
+    line-height: 1.5;
+  }
+
+  .filter-chip:hover {
+    background: var(--hover-bg);
+  }
+
+  .filter-chip.active {
+    border-color: var(--accent);
+    background: var(--accent-bg);
+    color: var(--accent);
+  }
+
+  .filter-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--fg-muted);
+    flex-shrink: 0;
+  }
+
+  .filter-chip.active .filter-dot {
+    background: var(--accent);
+  }
+
+  .filter-x {
+    font-size: 13px;
+    line-height: 1;
+    opacity: 0.8;
   }
 
   .tabs {
