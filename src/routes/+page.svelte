@@ -496,6 +496,14 @@
           moveSelection(-1);
           e.preventDefault();
           return;
+        case "ArrowLeft":
+          moveTab(-1);
+          e.preventDefault();
+          return;
+        case "ArrowRight":
+          moveTab(1);
+          e.preventDefault();
+          return;
         case "Enter":
           openSelected();
           e.preventDefault();
@@ -905,6 +913,13 @@
       );
       el?.scrollIntoView({ block: "nearest" });
     });
+  }
+
+  function moveTab(delta: number) {
+    const currentIdx = TABS.findIndex((t) => t.id === activeTab);
+    if (currentIdx < 0) return;
+    const nextIdx = (currentIdx + delta + TABS.length) % TABS.length;
+    void switchTab(TABS[nextIdx].id);
   }
 
   function openSelected() {
