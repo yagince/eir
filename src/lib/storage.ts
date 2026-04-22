@@ -5,6 +5,7 @@ export const INTERVAL_KEY = "eir.refreshMs";
 export const NOTIFY_KEY = "eir.notifyEnabled";
 export const EXCLUDED_REPOS_KEY = "eir.excludedRepos";
 export const HIDDEN_ITEMS_KEY = "eir.hiddenItems";
+export const PINNED_ITEMS_KEY = "eir.pinnedItems";
 export const WATCHED_ORGS_KEY = "eir.watchedOrgs";
 export const THEME_KEY = "eir.theme";
 
@@ -81,6 +82,19 @@ export function loadHiddenItems(): number[] {
 
 export function persistHiddenItems(values: Iterable<number>): void {
   localStorage.setItem(HIDDEN_ITEMS_KEY, JSON.stringify([...values]));
+}
+
+export function loadPinnedItems(): number[] {
+  try {
+    const raw = localStorage.getItem(PINNED_ITEMS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function persistPinnedItems(values: Iterable<number>): void {
+  localStorage.setItem(PINNED_ITEMS_KEY, JSON.stringify([...values]));
 }
 
 export function loadWatchedOrgs(): string[] {

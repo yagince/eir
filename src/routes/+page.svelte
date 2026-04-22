@@ -28,6 +28,7 @@
     loadHiddenItems,
     loadInterval,
     loadNotify,
+    loadPinnedItems,
     loadTab,
     loadTheme,
     loadWatchedOrgs,
@@ -35,6 +36,7 @@
     persistHiddenItems,
     persistInterval,
     persistNotify,
+    persistPinnedItems,
     persistTab,
     persistTheme,
     persistWatchedOrgs,
@@ -123,6 +125,7 @@
   let autostartEnabled = $state<boolean | null>(null);
   const excludedRepos = new SvelteSet<string>(loadExcludedRepos());
   const hiddenItems = new SvelteSet<number>(loadHiddenItems());
+  const pinnedItems = new SvelteSet<number>(loadPinnedItems());
   const watchedOrgs = new SvelteSet<string>(loadWatchedOrgs());
   let newExcludedRepo = $state("");
   let newWatchedOrg = $state("");
@@ -651,6 +654,15 @@
     void pushBackgroundConfig({ hiddenItems: [...hiddenItems] });
   }
 
+  function togglePin(id: number) {
+    if (pinnedItems.has(id)) {
+      pinnedItems.delete(id);
+    } else {
+      pinnedItems.add(id);
+    }
+    persistPinnedItems(pinnedItems);
+  }
+
   function addExcludedRepo() {
     const name = newExcludedRepo.trim();
     if (!name || !name.includes("/")) return;
@@ -704,6 +716,7 @@
     excludedRepos?: string[];
     watchedOrgs?: string[];
     hiddenItems?: number[];
+    pinnedItems?: number[];
     toggleShortcut?: string;
   };
 
@@ -716,6 +729,7 @@
       excludedRepos: [...excludedRepos].sort(),
       watchedOrgs: [...watchedOrgs].sort(),
       hiddenItems: [...hiddenItems].sort((a, b) => a - b),
+      pinnedItems: [...pinnedItems].sort((a, b) => a - b),
       toggleShortcut,
     };
   }
@@ -827,6 +841,16 @@
       applied.push("hidden items");
     }
 
+    if (Array.isArray(data.pinnedItems)) {
+      const next = data.pinnedItems.filter(
+        (n): n is number => typeof n === "number" && Number.isFinite(n),
+      );
+      pinnedItems.clear();
+      for (const n of next) pinnedItems.add(n);
+      persistPinnedItems(pinnedItems);
+      applied.push("pinned items");
+    }
+
     if (typeof data.toggleShortcut === "string" && data.toggleShortcut) {
       void invoke("set_toggle_shortcut", { shortcut: data.toggleShortcut })
         .then(() => {
@@ -876,7 +900,11 @@
   );
 
   const groups = $derived(
-    groupByRepo(visibleItems, (i) => notificationsByKey.has(itemKey(i))),
+    groupByRepo(
+      visibleItems,
+      (i) => notificationsByKey.has(itemKey(i)),
+      pinnedItems,
+    ),
   );
 
   // Flat item order matching the rendered list (repo-groups preserved), so
@@ -1012,6 +1040,7 @@
       {groups}
       {selectedId}
       {notificationsByKey}
+      {pinnedItems}
       tabs={TABS}
       {error}
       onRefresh={triggerRefresh}
@@ -1022,6 +1051,7 @@
       onOpenItem={openItem}
       onHideItem={hideItem}
       onUnhideItem={unhideItem}
+      onTogglePin={togglePin}
     />
   {/if}
 </main>

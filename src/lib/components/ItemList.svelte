@@ -15,6 +15,7 @@
     groups: RepoGroup[];
     selectedId: number | null;
     notificationsByKey: Map<string, NotificationItem[]>;
+    pinnedItems: ReadonlySet<number>;
     tabs: { id: Tab; label: string }[];
     error: string | null;
     onRefresh: () => void;
@@ -25,6 +26,7 @@
     onOpenItem: (item: WatchedItem) => void;
     onHideItem: (id: number) => void;
     onUnhideItem: (id: number) => void;
+    onTogglePin: (id: number) => void;
   };
 
   const {
@@ -35,6 +37,7 @@
     groups,
     selectedId,
     notificationsByKey,
+    pinnedItems,
     tabs,
     error,
     onRefresh,
@@ -45,6 +48,7 @@
     onOpenItem,
     onHideItem,
     onUnhideItem,
+    onTogglePin,
   }: Props = $props();
 </script>
 
@@ -113,10 +117,26 @@
   </section>
 {:else}
   <ul class="list" class:dim={loading}>
-    {#each groups as group (group.repo)}
-      <li class="group">
-        <div class="group-header">
-          <span class="group-repo">{group.repo}</span>
+    {#each groups as group (group.kind === "pinned" ? "__pinned__" : group.repo)}
+      <li class="group" class:pinned={group.kind === "pinned"}>
+        <div class="group-header" class:pinned-header={group.kind === "pinned"}>
+          <span class="group-repo">
+            {#if group.kind === "pinned"}
+              <svg
+                class="group-pin-icon"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <path
+                  d="M16 4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v3.8l-2.4 2.4A2 2 0 0 0 5 11.6V13h6v8l1 1 1-1v-8h6v-1.4a2 2 0 0 0-.6-1.4L16 7.8z"
+                />
+              </svg>
+              Pinned
+            {:else}
+              {group.repo}
+            {/if}
+          </span>
           {#if group.unreadCount > 0}
             <span class="group-count">{group.unreadCount}</span>
           {/if}
@@ -224,14 +244,39 @@
                   ↩
                 </button>
               {:else}
-                <button
-                  class="row-action"
-                  onclick={() => onHideItem(item.id)}
-                  title="Hide"
-                  aria-label="Hide"
-                >
-                  ×
-                </button>
+                <div class="row-actions">
+                  <button
+                    class="row-action pin-btn"
+                    class:pinned={pinnedItems.has(item.id)}
+                    onclick={() => onTogglePin(item.id)}
+                    title={pinnedItems.has(item.id) ? "Unpin" : "Pin"}
+                    aria-label={pinnedItems.has(item.id) ? "Unpin" : "Pin"}
+                  >
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill={pinnedItems.has(item.id)
+                        ? "currentColor"
+                        : "none"}
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M16 4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v3.8l-2.4 2.4A2 2 0 0 0 5 11.6V13h6v8l1 1 1-1v-8h6v-1.4a2 2 0 0 0-.6-1.4L16 7.8z"
+                      />
+                    </svg>
+                  </button>
+                  <button
+                    class="row-action"
+                    onclick={() => onHideItem(item.id)}
+                    title="Hide"
+                    aria-label="Hide"
+                  >
+                    ×
+                  </button>
+                </div>
               {/if}
             </li>
           {/each}
@@ -342,10 +387,23 @@
     backdrop-filter: blur(8px);
   }
 
+  .pinned-header {
+    color: var(--accent);
+  }
+
   .group-repo {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .group-pin-icon {
+    width: 11px;
+    height: 11px;
+    flex-shrink: 0;
   }
 
   .group-count {
@@ -395,11 +453,46 @@
   .row-action {
     visibility: hidden;
     pointer-events: none;
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 3px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .row-action:hover {
+    background: var(--hover-bg);
   }
 
   .item-row:hover .row-action {
     visibility: visible;
     pointer-events: auto;
+  }
+
+  .row-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+  }
+
+  .pin-btn svg {
+    width: 12px;
+    height: 12px;
+    display: block;
+  }
+
+  /* A pinned item keeps its pin button visible even when the row isn't
+     hovered — it's an "on/off" state indicator, not just an action. */
+  .pin-btn.pinned {
+    visibility: visible;
+    pointer-events: auto;
+    color: var(--accent);
   }
 
   .item:hover {

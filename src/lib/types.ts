@@ -52,4 +52,5 @@ export type RepoGroup = {
   items: WatchedItem[];
   mostRecent: string;
   unreadCount: number;
+  kind?: "pinned";
 };
