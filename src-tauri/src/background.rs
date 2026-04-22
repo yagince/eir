@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -239,10 +240,23 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
         }
     };
 
-    let (items_res, notifs_res) = tokio::join!(
+    // Run both fetches concurrently and emit partial state the moment either
+    // returns — the list is what the user stares at, so pushing it as soon as
+    // it arrives lets the popup refresh before notifications finish loading.
+    // The tray badge and diff-driven OS notifications still wait for both.
+    let (items_res, notifs_res) = drive_progressive_fetches(
         fetch_watched_with(&octo, tab.as_query_key(), &watched_orgs),
         fetch_notifications_with(&octo),
-    );
+        |items| {
+            handle.with_state(|s| s.items = items.clone());
+            emit_state(app, handle);
+        },
+        |notifs| {
+            handle.with_state(|s| s.notifications = notifs.clone());
+            emit_state(app, handle);
+        },
+    )
+    .await;
 
     // 401 on either call → clear the persisted token and bail.
     let unauthorized = matches!(&items_res, Err(e) if e.is_unauthorized)
@@ -355,6 +369,49 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
     update_tray_badge(app, handle);
 }
 
+/// Drive two fetch futures concurrently and invoke the matching callback as
+/// soon as each resolves — without waiting for the other. The callbacks run
+/// only on `Ok`; errors are returned to the caller so the standard 401 /
+/// fail-cycle branches can handle them. Extracted from `run_cycle` so the
+/// progressive ordering behaviour can be unit-tested without a Tauri runtime.
+async fn drive_progressive_fetches<I, N, E, FI, FN, OI, ON>(
+    items_fut: FI,
+    notifs_fut: FN,
+    mut on_items: OI,
+    mut on_notifs: ON,
+) -> (Result<I, E>, Result<N, E>)
+where
+    FI: Future<Output = Result<I, E>>,
+    FN: Future<Output = Result<N, E>>,
+    OI: FnMut(&I),
+    ON: FnMut(&N),
+{
+    tokio::pin!(items_fut);
+    tokio::pin!(notifs_fut);
+    let mut items_res: Option<Result<I, E>> = None;
+    let mut notifs_res: Option<Result<N, E>> = None;
+    while items_res.is_none() || notifs_res.is_none() {
+        tokio::select! {
+            r = &mut items_fut, if items_res.is_none() => {
+                if let Ok(ref items) = r {
+                    on_items(items);
+                }
+                items_res = Some(r);
+            }
+            r = &mut notifs_fut, if notifs_res.is_none() => {
+                if let Ok(ref notifs) = r {
+                    on_notifs(notifs);
+                }
+                notifs_res = Some(r);
+            }
+        }
+    }
+    (
+        items_res.expect("items future awaited"),
+        notifs_res.expect("notifications future awaited"),
+    )
+}
+
 fn fail_cycle(app: &AppHandle, handle: &BackgroundHandle, message: String) {
     handle.with_state(|s| {
         s.last_error = Some(message);
@@ -464,5 +521,159 @@ pub fn set_background_config(
         handle.trigger_refresh();
     } else if badge_dirty {
         update_tray_badge(&app, &handle);
+    }
+}
+
+#[cfg(test)]
+mod drive_progressive_fetches_tests {
+    use super::*;
+    use std::cell::{Cell, RefCell};
+    use std::time::Duration;
+    use tokio::sync::oneshot;
+
+    // Tests must not hang the suite if the ordering guarantee regresses — the
+    // progressive-emit tests deliberately deadlock on a bug, so they need a
+    // fuse. 2s is plenty for in-memory futures on any runner.
+    const TEST_TIMEOUT: Duration = Duration::from_secs(2);
+
+    #[tokio::test]
+    async fn returns_both_ok_results_and_invokes_each_callback_once() {
+        let items_seen: Cell<usize> = Cell::new(0);
+        let notifs_seen: Cell<usize> = Cell::new(0);
+
+        let fut = drive_progressive_fetches(
+            async { Ok::<Vec<u32>, String>(vec![1, 2, 3]) },
+            async { Ok::<Vec<&'static str>, String>(vec!["a", "b"]) },
+            |items: &Vec<u32>| {
+                items_seen.set(items_seen.get() + 1);
+                assert_eq!(items, &vec![1u32, 2, 3]);
+            },
+            |notifs: &Vec<&'static str>| {
+                notifs_seen.set(notifs_seen.get() + 1);
+                assert_eq!(notifs, &vec!["a", "b"]);
+            },
+        );
+
+        let (items_res, notifs_res) = tokio::time::timeout(TEST_TIMEOUT, fut)
+            .await
+            .expect("test timed out");
+
+        assert_eq!(items_res.unwrap(), vec![1u32, 2, 3]);
+        assert_eq!(notifs_res.unwrap(), vec!["a", "b"]);
+        assert_eq!(items_seen.get(), 1);
+        assert_eq!(notifs_seen.get(), 1);
+    }
+
+    #[tokio::test]
+    async fn errors_skip_callbacks_and_propagate_to_caller() {
+        let calls: Cell<usize> = Cell::new(0);
+
+        let fut = drive_progressive_fetches(
+            async { Err::<Vec<u32>, String>("items failed".into()) },
+            async { Err::<Vec<&'static str>, String>("notifs failed".into()) },
+            |_: &Vec<u32>| calls.set(calls.get() + 1),
+            |_: &Vec<&'static str>| calls.set(calls.get() + 1),
+        );
+
+        let (items_res, notifs_res) = tokio::time::timeout(TEST_TIMEOUT, fut)
+            .await
+            .expect("test timed out");
+
+        assert_eq!(items_res.unwrap_err(), "items failed");
+        assert_eq!(notifs_res.unwrap_err(), "notifs failed");
+        assert_eq!(calls.get(), 0);
+    }
+
+    #[tokio::test]
+    async fn items_ok_and_notifs_err_invokes_only_items_callback() {
+        let items_called: Cell<usize> = Cell::new(0);
+        let notifs_called: Cell<usize> = Cell::new(0);
+
+        let fut = drive_progressive_fetches(
+            async { Ok::<Vec<u32>, String>(vec![42]) },
+            async { Err::<Vec<&'static str>, String>("boom".into()) },
+            |_: &Vec<u32>| items_called.set(items_called.get() + 1),
+            |_: &Vec<&'static str>| notifs_called.set(notifs_called.get() + 1),
+        );
+
+        let (items_res, notifs_res) = tokio::time::timeout(TEST_TIMEOUT, fut)
+            .await
+            .expect("test timed out");
+
+        assert_eq!(items_res.unwrap(), vec![42]);
+        assert_eq!(notifs_res.unwrap_err(), "boom");
+        assert_eq!(items_called.get(), 1);
+        assert_eq!(notifs_called.get(), 0);
+    }
+
+    #[tokio::test]
+    async fn items_callback_fires_while_notifs_are_still_pending() {
+        // The notifs future is gated on a oneshot that the controller only
+        // releases AFTER the items callback has signalled. A non-progressive
+        // implementation (one that waits for both futures before invoking
+        // either callback) deadlocks — the controller waits on `fired_rx`,
+        // the driver waits on `notifs_rx`, and TEST_TIMEOUT trips the fuse.
+        let (notifs_tx, notifs_rx) = oneshot::channel::<()>();
+        let (fired_tx, fired_rx) = oneshot::channel::<()>();
+        let fired_slot: RefCell<Option<oneshot::Sender<()>>> = RefCell::new(Some(fired_tx));
+
+        let driver = drive_progressive_fetches(
+            async { Ok::<Vec<u32>, String>(vec![7]) },
+            async move {
+                notifs_rx.await.expect("notifs_tx dropped");
+                Ok::<Vec<&'static str>, String>(vec!["done"])
+            },
+            |_: &Vec<u32>| {
+                if let Some(tx) = fired_slot.borrow_mut().take() {
+                    tx.send(()).unwrap();
+                }
+            },
+            |_: &Vec<&'static str>| {},
+        );
+        let controller = async move {
+            fired_rx.await.expect("fired_tx dropped");
+            notifs_tx.send(()).unwrap();
+        };
+
+        let joined = tokio::time::timeout(TEST_TIMEOUT, async { tokio::join!(driver, controller) })
+            .await
+            .expect("items callback never fired while notifs were pending");
+
+        let ((items_res, notifs_res), _) = joined;
+        assert_eq!(items_res.unwrap(), vec![7]);
+        assert_eq!(notifs_res.unwrap(), vec!["done"]);
+    }
+
+    #[tokio::test]
+    async fn notifs_callback_fires_while_items_are_still_pending() {
+        let (items_tx, items_rx) = oneshot::channel::<()>();
+        let (fired_tx, fired_rx) = oneshot::channel::<()>();
+        let fired_slot: RefCell<Option<oneshot::Sender<()>>> = RefCell::new(Some(fired_tx));
+
+        let driver = drive_progressive_fetches(
+            async move {
+                items_rx.await.expect("items_tx dropped");
+                Ok::<Vec<u32>, String>(vec![9])
+            },
+            async { Ok::<Vec<&'static str>, String>(vec!["hi"]) },
+            |_: &Vec<u32>| {},
+            |_: &Vec<&'static str>| {
+                if let Some(tx) = fired_slot.borrow_mut().take() {
+                    tx.send(()).unwrap();
+                }
+            },
+        );
+        let controller = async move {
+            fired_rx.await.expect("fired_tx dropped");
+            items_tx.send(()).unwrap();
+        };
+
+        let joined = tokio::time::timeout(TEST_TIMEOUT, async { tokio::join!(driver, controller) })
+            .await
+            .expect("notifs callback never fired while items were pending");
+
+        let ((items_res, notifs_res), _) = joined;
+        assert_eq!(items_res.unwrap(), vec![9]);
+        assert_eq!(notifs_res.unwrap(), vec!["hi"]);
     }
 }
