@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { WatchedItem } from "./types";
 import {
+  filterBySearch,
   filterVisible,
   groupByRepo,
   itemKey,
@@ -208,5 +209,66 @@ describe("repoSuggestionsFrom", () => {
     ];
     const out = repoSuggestionsFrom(items, new Set(["c/c"]));
     expect(out).toEqual(["a/a", "b/b"]);
+  });
+});
+
+describe("filterBySearch", () => {
+  const items = [
+    makeItem({
+      id: 1,
+      repo: "acme/web",
+      number: 42,
+      title: "Fix login redirect loop",
+      author: "alice",
+    }),
+    makeItem({
+      id: 2,
+      repo: "acme/api",
+      number: 7,
+      title: "Add rate limiting",
+      author: "bob",
+    }),
+    makeItem({
+      id: 3,
+      repo: "other/cli",
+      number: 123,
+      title: "Upgrade CLI deps",
+      author: "carol",
+    }),
+  ];
+
+  it("returns input untouched when query is blank", () => {
+    expect(filterBySearch(items, "")).toBe(items);
+    expect(filterBySearch(items, "   ")).toBe(items);
+  });
+
+  it("matches case-insensitively against title", () => {
+    const out = filterBySearch(items, "LOGIN");
+    expect(out.map((i) => i.id)).toEqual([1]);
+  });
+
+  it("matches against repo name", () => {
+    const out = filterBySearch(items, "acme");
+    expect(out.map((i) => i.id)).toEqual([1, 2]);
+  });
+
+  it("matches against author", () => {
+    const out = filterBySearch(items, "bob");
+    expect(out.map((i) => i.id)).toEqual([2]);
+  });
+
+  it("matches against #number and bare number", () => {
+    expect(filterBySearch(items, "#42").map((i) => i.id)).toEqual([1]);
+    expect(filterBySearch(items, "123").map((i) => i.id)).toEqual([3]);
+  });
+
+  it("AND-combines whitespace-separated tokens", () => {
+    const out = filterBySearch(items, "acme limit");
+    expect(out.map((i) => i.id)).toEqual([2]);
+  });
+
+  it("returns empty array when no item matches all tokens", () => {
+    const out = filterBySearch(items, "acme nothingmatches");
+    expect(out).toEqual([]);
   });
 });

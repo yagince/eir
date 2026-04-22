@@ -18,6 +18,8 @@
     pinnedItems: ReadonlySet<number>;
     tabs: { id: Tab; label: string }[];
     error: string | null;
+    searchQuery: string;
+    searchVisible: boolean;
     onRefresh: () => void;
     onMarkAllVisibleAsRead: () => void;
     onShowSettings: () => void;
@@ -27,9 +29,11 @@
     onHideItem: (id: number) => void;
     onUnhideItem: (id: number) => void;
     onTogglePin: (id: number) => void;
+    onClearSearch: () => void;
+    onCloseSearch: () => void;
   };
 
-  const {
+  let {
     loading,
     activeTab,
     visibleItemsCount,
@@ -40,6 +44,8 @@
     pinnedItems,
     tabs,
     error,
+    searchQuery = $bindable(),
+    searchVisible,
     onRefresh,
     onMarkAllVisibleAsRead,
     onShowSettings,
@@ -49,7 +55,21 @@
     onHideItem,
     onUnhideItem,
     onTogglePin,
+    onClearSearch,
+    onCloseSearch,
   }: Props = $props();
+
+  function onSearchKeyDown(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      if (searchQuery !== "") {
+        onClearSearch();
+      } else {
+        onCloseSearch();
+      }
+      e.stopPropagation();
+      e.preventDefault();
+    }
+  }
 </script>
 
 <header class="toolbar">
@@ -111,9 +131,48 @@
     </button>
   {/each}
 </nav>
+{#if searchVisible || searchQuery !== ""}
+  <div class="search" class:active={searchQuery !== ""}>
+    <svg
+      class="search-icon"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <circle cx="11" cy="11" r="7" />
+      <path d="m21 21-4.3-4.3" />
+    </svg>
+    <input
+      class="search-input"
+      type="text"
+      placeholder="Search title, repo, author, #number · Esc to close"
+      aria-label="Search"
+      bind:value={searchQuery}
+      onkeydown={onSearchKeyDown}
+    />
+    {#if searchQuery !== ""}
+      <button
+        class="search-clear"
+        onclick={onClearSearch}
+        title="Clear search"
+        aria-label="Clear search"
+      >
+        ×
+      </button>
+    {/if}
+  </div>
+{/if}
 {#if visibleItemsCount === 0 && !loading}
   <section class="empty">
-    <p>Nothing here.</p>
+    {#if searchQuery !== ""}
+      <p>No matches for "{searchQuery}".</p>
+    {:else}
+      <p>Nothing here.</p>
+    {/if}
   </section>
 {:else}
   <ul class="list" class:dim={loading}>
@@ -332,6 +391,63 @@
     padding: 0 0 8px;
     border-bottom: 1px solid var(--border-subtle);
     margin-bottom: 8px;
+  }
+
+  .search {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    margin-bottom: 6px;
+    background: var(--surface-2);
+    border: 1px solid transparent;
+    border-radius: 6px;
+    transition: border-color 0.1s;
+  }
+
+  .search:focus-within,
+  .search.active {
+    border-color: var(--accent);
+  }
+
+  .search-icon {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
+    color: var(--fg-muted);
+  }
+
+  .search-input {
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: inherit;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+
+  .search-input::placeholder {
+    color: var(--fg-muted);
+  }
+
+  .search-clear {
+    flex-shrink: 0;
+    padding: 0 4px;
+    font-size: 14px;
+    line-height: 1;
+    background: none;
+    border: none;
+    color: var(--fg-muted);
+    cursor: pointer;
+    border-radius: 3px;
+  }
+
+  .search-clear:hover {
+    background: var(--hover-bg);
+    color: inherit;
   }
 
   .tab {

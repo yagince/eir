@@ -35,6 +35,32 @@ export function filterVisible(
   );
 }
 
+/// Case-insensitive whitespace-split AND match across the fields a human
+/// would scan: title, repo, author, and `#<number>`. Returns the input
+/// untouched when the query is blank so callers don't need a guard.
+export function filterBySearch(
+  items: WatchedItem[],
+  query: string,
+): WatchedItem[] {
+  const tokens = query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((t) => t.length > 0);
+  if (tokens.length === 0) return items;
+  return items.filter((item) => {
+    const haystack = [
+      item.title,
+      item.repo,
+      item.author,
+      `#${item.number}`,
+      String(item.number),
+    ]
+      .join(" ")
+      .toLowerCase();
+    return tokens.every((t) => haystack.includes(t));
+  });
+}
+
 export function groupByRepo(
   items: WatchedItem[],
   isUnread: (i: WatchedItem) => boolean,

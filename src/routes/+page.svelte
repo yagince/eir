@@ -18,6 +18,7 @@
   import { onDestroy, onMount } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import {
+    filterBySearch,
     filterVisible,
     groupByRepo,
     itemKey,
@@ -95,6 +96,8 @@
   let capturingShortcut = $state(false);
   let shortcutError = $state<string | null>(null);
   let selectedId = $state<number | null>(null);
+  let searchQuery = $state("");
+  let searchVisible = $state(false);
 
   // The notification plugin's sendNotification() just invokes
   // `new window.Notification(title, options)` under the hood and throws away
@@ -361,6 +364,9 @@
       showingSettings = false;
       // Clear selection so the $effect picks flatItems[0] on next render.
       selectedId = null;
+      // Search is transient — reopening shouldn't inherit a stale filter.
+      searchQuery = "";
+      searchVisible = false;
     }).then((fn) => {
       unlistenPopupHidden = fn;
     });
@@ -489,6 +495,20 @@
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+      // "/" or Cmd/Ctrl+F reveals the search input and moves focus to it.
+      // `/` alone is only grabbed when no modifier is held — otherwise
+      // Shift+/ (which also produces "?") could hijack other shortcuts.
+      if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        openSearch();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        openSearch();
+        return;
+      }
 
       switch (e.key) {
         case "ArrowDown":
@@ -888,11 +908,14 @@
   });
 
   const visibleItems = $derived(
-    filterVisible(items, {
-      tab: activeTab,
-      excludedRepos,
-      hiddenItems,
-    }),
+    filterBySearch(
+      filterVisible(items, {
+        tab: activeTab,
+        excludedRepos,
+        hiddenItems,
+      }),
+      searchQuery,
+    ),
   );
 
   const visibleUnreadCount = $derived(
@@ -954,6 +977,29 @@
     if (selectedId == null) return;
     const item = flatItems.find((i) => i.id === selectedId);
     if (item) void openItem(item);
+  }
+
+  function focusSearchInput() {
+    const el = document.querySelector<HTMLInputElement>(".search-input");
+    if (!el) return;
+    el.focus();
+    el.select();
+  }
+
+  function openSearch() {
+    // Reveal the bar, then focus after Svelte mounts the input on the next
+    // tick. Focusing in the same synchronous pass finds no element to grab.
+    searchVisible = true;
+    queueMicrotask(() => focusSearchInput());
+  }
+
+  function closeSearch() {
+    searchVisible = false;
+    searchQuery = "";
+  }
+
+  function clearSearch() {
+    searchQuery = "";
   }
 </script>
 
@@ -1043,6 +1089,8 @@
       {pinnedItems}
       tabs={TABS}
       {error}
+      {searchVisible}
+      bind:searchQuery
       onRefresh={triggerRefresh}
       onMarkAllVisibleAsRead={markAllVisibleAsRead}
       onShowSettings={() => (showingSettings = true)}
@@ -1052,6 +1100,8 @@
       onHideItem={hideItem}
       onUnhideItem={unhideItem}
       onTogglePin={togglePin}
+      onClearSearch={clearSearch}
+      onCloseSearch={closeSearch}
     />
   {/if}
 </main>
