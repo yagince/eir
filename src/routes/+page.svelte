@@ -18,6 +18,7 @@
   import { onDestroy, onMount } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import {
+    filterBySearch,
     filterVisible,
     groupByRepo,
     itemKey,
@@ -28,6 +29,7 @@
     loadHiddenItems,
     loadInterval,
     loadNotify,
+    loadPinnedItems,
     loadTab,
     loadTheme,
     loadWatchedOrgs,
@@ -35,6 +37,7 @@
     persistHiddenItems,
     persistInterval,
     persistNotify,
+    persistPinnedItems,
     persistTab,
     persistTheme,
     persistWatchedOrgs,
@@ -93,6 +96,8 @@
   let capturingShortcut = $state(false);
   let shortcutError = $state<string | null>(null);
   let selectedId = $state<number | null>(null);
+  let searchQuery = $state("");
+  let searchVisible = $state(false);
 
   // The notification plugin's sendNotification() just invokes
   // `new window.Notification(title, options)` under the hood and throws away
@@ -123,6 +128,7 @@
   let autostartEnabled = $state<boolean | null>(null);
   const excludedRepos = new SvelteSet<string>(loadExcludedRepos());
   const hiddenItems = new SvelteSet<number>(loadHiddenItems());
+  const pinnedItems = new SvelteSet<number>(loadPinnedItems());
   const watchedOrgs = new SvelteSet<string>(loadWatchedOrgs());
   let newExcludedRepo = $state("");
   let newWatchedOrg = $state("");
@@ -358,6 +364,9 @@
       showingSettings = false;
       // Clear selection so the $effect picks flatItems[0] on next render.
       selectedId = null;
+      // Search is transient — reopening shouldn't inherit a stale filter.
+      searchQuery = "";
+      searchVisible = false;
     }).then((fn) => {
       unlistenPopupHidden = fn;
     });
@@ -486,6 +495,20 @@
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+      // "/" or Cmd/Ctrl+F reveals the search input and moves focus to it.
+      // `/` alone is only grabbed when no modifier is held — otherwise
+      // Shift+/ (which also produces "?") could hijack other shortcuts.
+      if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        openSearch();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        openSearch();
+        return;
+      }
 
       switch (e.key) {
         case "ArrowDown":
@@ -651,6 +674,15 @@
     void pushBackgroundConfig({ hiddenItems: [...hiddenItems] });
   }
 
+  function togglePin(id: number) {
+    if (pinnedItems.has(id)) {
+      pinnedItems.delete(id);
+    } else {
+      pinnedItems.add(id);
+    }
+    persistPinnedItems(pinnedItems);
+  }
+
   function addExcludedRepo() {
     const name = newExcludedRepo.trim();
     if (!name || !name.includes("/")) return;
@@ -704,6 +736,7 @@
     excludedRepos?: string[];
     watchedOrgs?: string[];
     hiddenItems?: number[];
+    pinnedItems?: number[];
     toggleShortcut?: string;
   };
 
@@ -716,6 +749,7 @@
       excludedRepos: [...excludedRepos].sort(),
       watchedOrgs: [...watchedOrgs].sort(),
       hiddenItems: [...hiddenItems].sort((a, b) => a - b),
+      pinnedItems: [...pinnedItems].sort((a, b) => a - b),
       toggleShortcut,
     };
   }
@@ -827,6 +861,16 @@
       applied.push("hidden items");
     }
 
+    if (Array.isArray(data.pinnedItems)) {
+      const next = data.pinnedItems.filter(
+        (n): n is number => typeof n === "number" && Number.isFinite(n),
+      );
+      pinnedItems.clear();
+      for (const n of next) pinnedItems.add(n);
+      persistPinnedItems(pinnedItems);
+      applied.push("pinned items");
+    }
+
     if (typeof data.toggleShortcut === "string" && data.toggleShortcut) {
       void invoke("set_toggle_shortcut", { shortcut: data.toggleShortcut })
         .then(() => {
@@ -864,11 +908,14 @@
   });
 
   const visibleItems = $derived(
-    filterVisible(items, {
-      tab: activeTab,
-      excludedRepos,
-      hiddenItems,
-    }),
+    filterBySearch(
+      filterVisible(items, {
+        tab: activeTab,
+        excludedRepos,
+        hiddenItems,
+      }),
+      searchQuery,
+    ),
   );
 
   const visibleUnreadCount = $derived(
@@ -876,7 +923,11 @@
   );
 
   const groups = $derived(
-    groupByRepo(visibleItems, (i) => notificationsByKey.has(itemKey(i))),
+    groupByRepo(
+      visibleItems,
+      (i) => notificationsByKey.has(itemKey(i)),
+      pinnedItems,
+    ),
   );
 
   // Flat item order matching the rendered list (repo-groups preserved), so
@@ -926,6 +977,29 @@
     if (selectedId == null) return;
     const item = flatItems.find((i) => i.id === selectedId);
     if (item) void openItem(item);
+  }
+
+  function focusSearchInput() {
+    const el = document.querySelector<HTMLInputElement>(".search-input");
+    if (!el) return;
+    el.focus();
+    el.select();
+  }
+
+  function openSearch() {
+    // Reveal the bar, then focus after Svelte mounts the input on the next
+    // tick. Focusing in the same synchronous pass finds no element to grab.
+    searchVisible = true;
+    queueMicrotask(() => focusSearchInput());
+  }
+
+  function closeSearch() {
+    searchVisible = false;
+    searchQuery = "";
+  }
+
+  function clearSearch() {
+    searchQuery = "";
   }
 </script>
 
@@ -1012,8 +1086,11 @@
       {groups}
       {selectedId}
       {notificationsByKey}
+      {pinnedItems}
       tabs={TABS}
       {error}
+      {searchVisible}
+      bind:searchQuery
       onRefresh={triggerRefresh}
       onMarkAllVisibleAsRead={markAllVisibleAsRead}
       onShowSettings={() => (showingSettings = true)}
@@ -1022,6 +1099,9 @@
       onOpenItem={openItem}
       onHideItem={hideItem}
       onUnhideItem={unhideItem}
+      onTogglePin={togglePin}
+      onClearSearch={clearSearch}
+      onCloseSearch={closeSearch}
     />
   {/if}
 </main>

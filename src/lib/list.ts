@@ -35,12 +35,44 @@ export function filterVisible(
   );
 }
 
+/// Case-insensitive whitespace-split AND match across the fields a human
+/// would scan: title, repo, author, and `#<number>`. Returns the input
+/// untouched when the query is blank so callers don't need a guard.
+export function filterBySearch(
+  items: WatchedItem[],
+  query: string,
+): WatchedItem[] {
+  const tokens = query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((t) => t.length > 0);
+  if (tokens.length === 0) return items;
+  return items.filter((item) => {
+    const haystack = [
+      item.title,
+      item.repo,
+      item.author,
+      `#${item.number}`,
+      String(item.number),
+    ]
+      .join(" ")
+      .toLowerCase();
+    return tokens.every((t) => haystack.includes(t));
+  });
+}
+
 export function groupByRepo(
   items: WatchedItem[],
   isUnread: (i: WatchedItem) => boolean,
+  pinnedIds: ReadonlySet<number> = new Set(),
 ): RepoGroup[] {
+  const pinned: WatchedItem[] = [];
   const byRepo = new Map<string, WatchedItem[]>();
   for (const item of items) {
+    if (pinnedIds.has(item.id)) {
+      pinned.push(item);
+      continue;
+    }
     const bucket = byRepo.get(item.repo);
     if (bucket) {
       bucket.push(item);
@@ -48,18 +80,30 @@ export function groupByRepo(
       byRepo.set(item.repo, [item]);
     }
   }
-  const result: RepoGroup[] = [];
+
+  const repoGroups: RepoGroup[] = [];
   for (const [repo, groupItems] of byRepo) {
     groupItems.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
-    result.push({
+    repoGroups.push({
       repo,
       items: groupItems,
       mostRecent: groupItems[0].updated_at,
       unreadCount: groupItems.filter(isUnread).length,
     });
   }
-  result.sort((a, b) => b.mostRecent.localeCompare(a.mostRecent));
-  return result;
+  repoGroups.sort((a, b) => b.mostRecent.localeCompare(a.mostRecent));
+
+  if (pinned.length === 0) return repoGroups;
+
+  pinned.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  const pinnedGroup: RepoGroup = {
+    repo: "Pinned",
+    items: pinned,
+    mostRecent: pinned[0].updated_at,
+    unreadCount: pinned.filter(isUnread).length,
+    kind: "pinned",
+  };
+  return [pinnedGroup, ...repoGroups];
 }
 
 export function repoSuggestionsFrom(

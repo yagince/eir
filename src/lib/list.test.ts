@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { WatchedItem } from "./types";
 import {
+  filterBySearch,
   filterVisible,
   groupByRepo,
   itemKey,
@@ -130,6 +131,72 @@ describe("groupByRepo", () => {
     const groups = groupByRepo(items, (i) => unread.has(i.id));
     expect(groups[0].unreadCount).toBe(2);
   });
+
+  it("places pinned items in a dedicated top group and removes them from their repo group", () => {
+    const items = [
+      makeItem({
+        id: 1,
+        repo: "a/a",
+        number: 1,
+        updated_at: "2026-04-10T00:00:00Z",
+      }),
+      makeItem({
+        id: 2,
+        repo: "b/b",
+        number: 2,
+        updated_at: "2026-04-19T00:00:00Z",
+      }),
+      makeItem({
+        id: 3,
+        repo: "a/a",
+        number: 3,
+        updated_at: "2026-04-18T00:00:00Z",
+      }),
+    ];
+    const groups = groupByRepo(items, () => false, new Set([2]));
+    expect(groups[0].kind).toBe("pinned");
+    expect(groups[0].items.map((i) => i.id)).toEqual([2]);
+    // b/b's sole item moved into the pinned group, so b/b disappears.
+    const remaining = groups.slice(1);
+    expect(remaining.map((g) => g.repo)).toEqual(["a/a"]);
+    expect(remaining[0].items.map((i) => i.id)).toEqual([3, 1]);
+  });
+
+  it("sorts the pinned group by updated_at desc", () => {
+    const items = [
+      makeItem({
+        id: 1,
+        repo: "a/a",
+        number: 1,
+        updated_at: "2026-04-10T00:00:00Z",
+      }),
+      makeItem({
+        id: 2,
+        repo: "b/b",
+        number: 2,
+        updated_at: "2026-04-19T00:00:00Z",
+      }),
+    ];
+    const groups = groupByRepo(items, () => false, new Set([1, 2]));
+    expect(groups[0].kind).toBe("pinned");
+    expect(groups[0].items.map((i) => i.id)).toEqual([2, 1]);
+  });
+
+  it("omits the pinned group entirely when nothing is pinned", () => {
+    const items = [makeItem({ id: 1, repo: "a/a", number: 1 })];
+    const groups = groupByRepo(items, () => false, new Set());
+    expect(groups.some((g) => g.kind === "pinned")).toBe(false);
+  });
+
+  it("counts unread within the pinned group via predicate", () => {
+    const items = [
+      makeItem({ id: 1, repo: "a/a", number: 1 }),
+      makeItem({ id: 2, repo: "b/b", number: 2 }),
+    ];
+    const groups = groupByRepo(items, (i) => i.id === 1, new Set([1, 2]));
+    expect(groups[0].kind).toBe("pinned");
+    expect(groups[0].unreadCount).toBe(1);
+  });
 });
 
 describe("repoSuggestionsFrom", () => {
@@ -142,5 +209,66 @@ describe("repoSuggestionsFrom", () => {
     ];
     const out = repoSuggestionsFrom(items, new Set(["c/c"]));
     expect(out).toEqual(["a/a", "b/b"]);
+  });
+});
+
+describe("filterBySearch", () => {
+  const items = [
+    makeItem({
+      id: 1,
+      repo: "acme/web",
+      number: 42,
+      title: "Fix login redirect loop",
+      author: "alice",
+    }),
+    makeItem({
+      id: 2,
+      repo: "acme/api",
+      number: 7,
+      title: "Add rate limiting",
+      author: "bob",
+    }),
+    makeItem({
+      id: 3,
+      repo: "other/cli",
+      number: 123,
+      title: "Upgrade CLI deps",
+      author: "carol",
+    }),
+  ];
+
+  it("returns input untouched when query is blank", () => {
+    expect(filterBySearch(items, "")).toBe(items);
+    expect(filterBySearch(items, "   ")).toBe(items);
+  });
+
+  it("matches case-insensitively against title", () => {
+    const out = filterBySearch(items, "LOGIN");
+    expect(out.map((i) => i.id)).toEqual([1]);
+  });
+
+  it("matches against repo name", () => {
+    const out = filterBySearch(items, "acme");
+    expect(out.map((i) => i.id)).toEqual([1, 2]);
+  });
+
+  it("matches against author", () => {
+    const out = filterBySearch(items, "bob");
+    expect(out.map((i) => i.id)).toEqual([2]);
+  });
+
+  it("matches against #number and bare number", () => {
+    expect(filterBySearch(items, "#42").map((i) => i.id)).toEqual([1]);
+    expect(filterBySearch(items, "123").map((i) => i.id)).toEqual([3]);
+  });
+
+  it("AND-combines whitespace-separated tokens", () => {
+    const out = filterBySearch(items, "acme limit");
+    expect(out.map((i) => i.id)).toEqual([2]);
+  });
+
+  it("returns empty array when no item matches all tokens", () => {
+    const out = filterBySearch(items, "acme nothingmatches");
+    expect(out).toEqual([]);
   });
 });
