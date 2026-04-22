@@ -426,9 +426,6 @@
     if (document.visibilityState !== "visible") return;
     const list = document.querySelector<HTMLElement>(".list");
     if (list) list.scrollTop = 0;
-    // Opening the popup is an implicit "what's new?" — the worker's interval
-    // fires at most every refreshMs, which can be minutes.
-    triggerRefresh();
   }
 
   function formatShortcut(e: KeyboardEvent): string | null {
