@@ -1,0 +1,193 @@
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+
+  --bg: rgba(246, 246, 248, 0.98);
+  --fg: #1b1b1f;
+  --fg-muted: rgba(27, 27, 31, 0.6);
+  --fg-muted-strong: rgba(27, 27, 31, 0.7);
+  --fg-subtle: rgba(27, 27, 31, 0.5);
+
+  --border: rgba(0, 0, 0, 0.15);
+  --border-subtle: rgba(0, 0, 0, 0.08);
+  --border-faint: rgba(0, 0, 0, 0.06);
+
+  --surface-1: rgba(0, 0, 0, 0.04);
+  --surface-2: rgba(0, 0, 0, 0.06);
+  --surface-2-hover: rgba(0, 0, 0, 0.1);
+  --hover-bg: rgba(0, 0, 0, 0.05);
+
+  --scrollbar-thumb: rgba(0, 0, 0, 0.22);
+  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.35);
+
+  --accent: #0969da;
+  --accent-bg: rgba(9, 105, 218, 0.12);
+  --accent-bg-strong: rgba(9, 105, 218, 0.15);
+  --accent-bg-hover: rgba(9, 105, 218, 0.18);
+  --on-accent: white;
+
+  --success: #1a7f37;
+  --success-bg: rgba(26, 127, 55, 0.15);
+
+  --danger: #d1242f;
+  --danger-bg: rgba(209, 36, 47, 0.15);
+  --danger-bg-faint: rgba(209, 36, 47, 0.12);
+
+  --warning: #9a6700;
+  --warning-bg: rgba(154, 103, 0, 0.15);
+
+  --neutral: #57606a;
+  --neutral-bg: rgba(87, 96, 106, 0.15);
+  --neutral-bg-faint: rgba(87, 96, 106, 0.1);
+  --neutral-border: rgba(87, 96, 106, 0.45);
+  --neutral-dim: rgba(87, 96, 106, 0.7);
+}
+
+:root[data-theme="dark"] {
+  --bg: rgba(30, 30, 32, 0.98);
+  --fg: #ececef;
+  --fg-muted: rgba(236, 236, 239, 0.6);
+  --fg-muted-strong: rgba(236, 236, 239, 0.7);
+  --fg-subtle: rgba(236, 236, 239, 0.4);
+
+  --border: rgba(255, 255, 255, 0.15);
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-faint: rgba(255, 255, 255, 0.06);
+
+  --surface-1: rgba(255, 255, 255, 0.05);
+  --surface-2: rgba(255, 255, 255, 0.08);
+  --surface-2-hover: rgba(255, 255, 255, 0.14);
+  --hover-bg: rgba(255, 255, 255, 0.06);
+
+  --scrollbar-thumb: rgba(255, 255, 255, 0.2);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.32);
+
+  --accent: #58a6ff;
+  --accent-bg: rgba(88, 166, 255, 0.15);
+  --accent-bg-strong: rgba(88, 166, 255, 0.18);
+  --accent-bg-hover: rgba(88, 166, 255, 0.22);
+
+  --success: #3fb950;
+  --success-bg: rgba(46, 160, 67, 0.2);
+
+  --danger: #ff7b72;
+  --danger-bg: rgba(248, 81, 73, 0.2);
+  --danger-bg-faint: rgba(248, 81, 73, 0.2);
+
+  --warning: #d29922;
+  --warning-bg: rgba(187, 128, 9, 0.2);
+
+  --neutral: #8b949e;
+  --neutral-bg: rgba(139, 148, 158, 0.2);
+  --neutral-bg-faint: rgba(139, 148, 158, 0.12);
+  --neutral-border: rgba(139, 148, 158, 0.5);
+  --neutral-dim: rgba(139, 148, 158, 0.7);
+}
+
+body {
+  margin: 0;
+  padding: 0;
+}
+
+.list,
+.settings {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+.list::-webkit-scrollbar,
+.settings::-webkit-scrollbar {
+  width: 8px;
+}
+
+.list::-webkit-scrollbar-track,
+.settings::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.list::-webkit-scrollbar-thumb,
+.settings::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.list::-webkit-scrollbar-thumb:hover,
+.settings::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+  background-clip: content-box;
+}
+
+.auth,
+.device,
+.empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+}
+
+button.primary,
+button.secondary,
+button.refresh,
+button.signout {
+  padding: 8px 14px;
+  font-size: 13px;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.primary,
+.refresh {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.secondary {
+  background: var(--surface-2);
+  color: inherit;
+}
+
+.signout {
+  background: var(--surface-2);
+  color: inherit;
+}
+
+.signout:hover {
+  background: var(--danger-bg-faint);
+  color: var(--danger);
+}
+
+.refresh:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+.row-action {
+  flex-shrink: 0;
+  width: 24px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  font-size: 14px;
+  color: var(--fg-subtle);
+  cursor: pointer;
+}
+
+.row-action:hover {
+  color: var(--danger);
+  background: var(--hover-bg);
+}
