@@ -306,3 +306,176 @@
     {/if}
   </div>
 </section>
+
+<style>
+  .settings {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+
+  .settings-header {
+    margin-bottom: 12px;
+  }
+
+  .back {
+    background: none;
+    border: none;
+    padding: 4px 0;
+    font-size: 12px;
+    color: var(--fg-muted);
+    cursor: pointer;
+  }
+
+  .back:hover {
+    color: var(--accent);
+  }
+
+  .settings-body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .setting-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 13px;
+    gap: 12px;
+  }
+
+  .setting-label {
+    color: inherit;
+  }
+
+  .setting-row select {
+    font-size: 13px;
+    padding: 4px 6px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--surface-1);
+    color: inherit;
+  }
+
+  .setting-row input[type="checkbox"] {
+    width: 18px;
+    height: 18px;
+    accent-color: var(--accent);
+  }
+
+  .setting-hint {
+    margin: 8px 0 0;
+    font-size: 11px;
+    color: var(--fg-muted);
+  }
+
+  .setting-hint kbd {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 10px;
+    padding: 1px 4px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--surface-1);
+  }
+
+  .shortcut-capture {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 12px;
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--surface-1);
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .shortcut-capture.capturing {
+    background: var(--accent-bg-strong);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+
+  .setting-hint-inline {
+    font-size: 11px;
+    color: var(--fg-muted);
+    margin-left: 4px;
+  }
+
+  .setting-hint-inline.update-available {
+    color: var(--success);
+    font-weight: 500;
+  }
+
+  .setting-hint-inline.error-inline {
+    color: var(--danger);
+  }
+
+  .setting-section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-faint);
+  }
+
+  .setting-buttons {
+    display: flex;
+    gap: 8px;
+  }
+
+  .setting-hint.io-path {
+    font-family: "SF Mono", Menlo, monospace;
+    word-break: break-all;
+  }
+
+  .excluded-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .excluded-list li {
+    display: flex;
+    align-items: center;
+    padding: 4px 6px;
+    font-size: 12px;
+    border-radius: 5px;
+    background: var(--surface-1);
+  }
+
+  .excluded-list .row-action {
+    opacity: 0.6;
+  }
+
+  .excluded-list li:hover .row-action {
+    opacity: 1;
+  }
+
+  .excluded-repo {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .excluded-add {
+    display: flex;
+    gap: 6px;
+  }
+
+  .excluded-add input {
+    flex: 1;
+    padding: 4px 6px;
+    font-size: 12px;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--surface-1);
+    color: inherit;
+    min-width: 0;
+  }
+</style>
