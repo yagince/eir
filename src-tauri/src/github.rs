@@ -6,11 +6,39 @@ use tauri::State;
 
 use crate::auth::{clear_stored_token, AppState};
 
-fn is_unauthorized(err: &octocrab::Error) -> bool {
-    if let octocrab::Error::GitHub { source, .. } = err {
-        return source.status_code.as_u16() == 401;
+/// Error type for the inner fetch helpers that background tasks and Tauri
+/// commands share. The `is_unauthorized` flag lets callers decide whether to
+/// clear the persisted token (a 401 means the stored credential is dead).
+pub struct GithubError {
+    pub message: String,
+    pub is_unauthorized: bool,
+}
+
+impl GithubError {
+    pub fn from_octocrab(err: octocrab::Error) -> Self {
+        let is_unauthorized = match &err {
+            octocrab::Error::GitHub { source, .. } => source.status_code.as_u16() == 401,
+            _ => false,
+        };
+        Self {
+            message: err.to_string(),
+            is_unauthorized,
+        }
     }
-    false
+
+    pub fn other(msg: impl Into<String>) -> Self {
+        Self {
+            message: msg.into(),
+            is_unauthorized: false,
+        }
+    }
+}
+
+pub fn build_octocrab(token: &str) -> Result<octocrab::Octocrab, String> {
+    octocrab::OctocrabBuilder::new()
+        .personal_token(token.to_string())
+        .build()
+        .map_err(|e| e.to_string())
 }
 
 fn build_octo(auth: &Mutex<AppState>) -> Result<octocrab::Octocrab, String> {
@@ -20,10 +48,7 @@ fn build_octo(auth: &Mutex<AppState>) -> Result<octocrab::Octocrab, String> {
         .token
         .clone()
         .ok_or("not_authenticated")?;
-    octocrab::OctocrabBuilder::new()
-        .personal_token(token)
-        .build()
-        .map_err(|e| e.to_string())
+    build_octocrab(&token)
 }
 
 // ---------------------------------------------------------------------------
@@ -34,35 +59,35 @@ fn build_octo(auth: &Mutex<AppState>) -> Result<octocrab::Octocrab, String> {
 #[derive(Serialize, Clone)]
 #[cfg_attr(test, derive(Debug))]
 pub struct Reviewer {
-    login: String,
-    avatar_url: String,
-    state: &'static str, // "approved" | "changes_requested" | "commented" | "dismissed" | "pending"
+    pub login: String,
+    pub avatar_url: String,
+    pub state: &'static str, // "approved" | "changes_requested" | "commented" | "dismissed" | "pending"
 }
 
 #[derive(Serialize, Clone)]
 #[cfg_attr(test, derive(Debug))]
 pub struct Commenter {
-    login: String,
-    avatar_url: String,
+    pub login: String,
+    pub avatar_url: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct WatchedItem {
-    id: u64,
-    kind: &'static str,
-    title: String,
-    number: u64,
-    repo: String,
-    url: String,
-    author: String,
-    author_avatar: String,
-    comments: u32,
-    updated_at: String,
-    state: &'static str,
-    is_draft: bool,
-    reviewers: Vec<Reviewer>,
-    commenters: Vec<Commenter>,
-    ci_status: Option<&'static str>, // "success" | "pending" | "failure" | "error"
+    pub id: u64,
+    pub kind: &'static str,
+    pub title: String,
+    pub number: u64,
+    pub repo: String,
+    pub url: String,
+    pub author: String,
+    pub author_avatar: String,
+    pub comments: u32,
+    pub updated_at: String,
+    pub state: &'static str,
+    pub is_draft: bool,
+    pub reviewers: Vec<Reviewer>,
+    pub commenters: Vec<Commenter>,
+    pub ci_status: Option<&'static str>, // "success" | "pending" | "failure" | "error"
 }
 
 fn queries_for_tab(tab: &str, watched_orgs: &[String]) -> Vec<String> {
@@ -477,16 +502,12 @@ fn issue_to_item(issue: IssueNode) -> WatchedItem {
     }
 }
 
-#[tauri::command]
-pub async fn fetch_watched(
-    tab: String,
-    watched_orgs: Option<Vec<String>>,
-    auth: State<'_, Mutex<AppState>>,
-) -> Result<Vec<WatchedItem>, String> {
-    let octo = build_octo(&auth)?;
-
-    let orgs = watched_orgs.unwrap_or_default();
-    let queries = queries_for_tab(&tab, &orgs);
+pub async fn fetch_watched_with(
+    octo: &octocrab::Octocrab,
+    tab: &str,
+    watched_orgs: &[String],
+) -> Result<Vec<WatchedItem>, GithubError> {
+    let queries = queries_for_tab(tab, watched_orgs);
     let query_str = build_search_query(queries.len());
     let variables: serde_json::Map<String, serde_json::Value> = queries
         .iter()
@@ -499,34 +520,48 @@ pub async fn fetch_watched(
         "variables": variables,
     });
 
-    let resp: GqlResp = match octo.graphql(&body).await {
-        Ok(r) => r,
-        Err(err) => {
-            if is_unauthorized(&err) {
-                clear_stored_token(&auth);
-                return Err("not_authenticated".into());
-            }
-            return Err(err.to_string());
-        }
-    };
+    let resp: GqlResp = octo
+        .graphql(&body)
+        .await
+        .map_err(GithubError::from_octocrab)?;
 
     if !resp.errors.is_empty() {
-        return Err(resp
-            .errors
-            .into_iter()
-            .map(|e| e.message)
-            .collect::<Vec<_>>()
-            .join("; "));
+        return Err(GithubError::other(
+            resp.errors
+                .into_iter()
+                .map(|e| e.message)
+                .collect::<Vec<_>>()
+                .join("; "),
+        ));
     }
 
     let Some(data) = resp.data else {
-        return Err("graphql returned no data".into());
+        return Err(GithubError::other("graphql returned no data"));
     };
 
     // Walk alias results in a stable order (s0, s1, ...) so the primary
     // `involves:@me` query always gets first crack at each id.
-    let items = merge_search_results(data);
-    Ok(items)
+    Ok(merge_search_results(data))
+}
+
+#[tauri::command]
+pub async fn fetch_watched(
+    tab: String,
+    watched_orgs: Option<Vec<String>>,
+    auth: State<'_, Mutex<AppState>>,
+) -> Result<Vec<WatchedItem>, String> {
+    let octo = build_octo(&auth)?;
+    let orgs = watched_orgs.unwrap_or_default();
+    match fetch_watched_with(&octo, &tab, &orgs).await {
+        Ok(items) => Ok(items),
+        Err(err) => {
+            if err.is_unauthorized {
+                clear_stored_token(&auth);
+                return Err("not_authenticated".into());
+            }
+            Err(err.message)
+        }
+    }
 }
 
 /// Collapse the alias-keyed map returned by GraphQL search (s0, s1, …) into
@@ -572,7 +607,7 @@ pub struct ItemRef {
     pub number: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 #[cfg_attr(test, derive(Debug, PartialEq))]
 pub struct ItemState {
     pub repo: String,
@@ -637,29 +672,21 @@ fn parse_item_state(resp: &serde_json::Value, index: usize, kind: &str) -> &'sta
     map_item_state(raw)
 }
 
-#[tauri::command]
-pub async fn fetch_item_states(
-    items: Vec<ItemRef>,
-    auth: State<'_, Mutex<AppState>>,
-) -> Result<Vec<ItemState>, String> {
+pub async fn fetch_item_states_with(
+    octo: &octocrab::Octocrab,
+    items: &[ItemRef],
+) -> Result<Vec<ItemState>, GithubError> {
     if items.is_empty() {
         return Ok(Vec::new());
     }
-    let octo = build_octo(&auth)?;
 
-    let (query, variables) = build_item_states_query(&items);
+    let (query, variables) = build_item_states_query(items);
     let body = serde_json::json!({ "query": query, "variables": variables });
 
-    let resp: serde_json::Value = match octo.graphql(&body).await {
-        Ok(v) => v,
-        Err(err) => {
-            if is_unauthorized(&err) {
-                clear_stored_token(&auth);
-                return Err("not_authenticated".into());
-            }
-            return Err(err.to_string());
-        }
-    };
+    let resp: serde_json::Value = octo
+        .graphql(&body)
+        .await
+        .map_err(GithubError::from_octocrab)?;
 
     // Bubble GraphQL-level errors (e.g. a repo we no longer have access to)
     // rather than silently returning "unknown" for every item — that would
@@ -672,7 +699,7 @@ pub async fn fetch_item_states(
                 .collect::<Vec<_>>()
                 .join("; ");
             if !joined.is_empty() {
-                return Err(joined);
+                return Err(GithubError::other(joined));
             }
         }
     }
@@ -695,21 +722,39 @@ pub async fn fetch_item_states(
     Ok(out)
 }
 
+#[tauri::command]
+pub async fn fetch_item_states(
+    items: Vec<ItemRef>,
+    auth: State<'_, Mutex<AppState>>,
+) -> Result<Vec<ItemState>, String> {
+    let octo = build_octo(&auth)?;
+    match fetch_item_states_with(&octo, &items).await {
+        Ok(states) => Ok(states),
+        Err(err) => {
+            if err.is_unauthorized {
+                clear_stored_token(&auth);
+                return Err("not_authenticated".into());
+            }
+            Err(err.message)
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Notifications — GitHub's GraphQL schema does not expose the notifications
 // inbox or mark-as-read, so these remain REST.
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct NotificationItem {
-    thread_id: u64,
-    reason: String,
-    repo: String,
-    kind: &'static str,
-    number: Option<u64>,
-    title: String,
-    url: String,
-    updated_at: String,
+    pub thread_id: u64,
+    pub reason: String,
+    pub repo: String,
+    pub kind: &'static str,
+    pub number: Option<u64>,
+    pub title: String,
+    pub url: String,
+    pub updated_at: String,
 }
 
 fn subject_kind(type_name: &str) -> &'static str {
@@ -737,13 +782,10 @@ fn subject_html_url(api_url: Option<&str>, repo: &str, kind: &str, number: Optio
     api_url.map(String::from).unwrap_or_default()
 }
 
-#[tauri::command]
-pub async fn fetch_notifications(
-    auth: State<'_, Mutex<AppState>>,
-) -> Result<Vec<NotificationItem>, String> {
-    let octo = build_octo(&auth)?;
-
-    let page = match octo
+pub async fn fetch_notifications_with(
+    octo: &octocrab::Octocrab,
+) -> Result<Vec<NotificationItem>, GithubError> {
+    let page = octo
         .activity()
         .notifications()
         .list()
@@ -751,16 +793,7 @@ pub async fn fetch_notifications(
         .per_page(100)
         .send()
         .await
-    {
-        Ok(p) => p,
-        Err(err) => {
-            if is_unauthorized(&err) {
-                clear_stored_token(&auth);
-                return Err("not_authenticated".into());
-            }
-            return Err(err.to_string());
-        }
-    };
+        .map_err(GithubError::from_octocrab)?;
 
     let notifications = page
         .items
@@ -788,6 +821,23 @@ pub async fn fetch_notifications(
 }
 
 #[tauri::command]
+pub async fn fetch_notifications(
+    auth: State<'_, Mutex<AppState>>,
+) -> Result<Vec<NotificationItem>, String> {
+    let octo = build_octo(&auth)?;
+    match fetch_notifications_with(&octo).await {
+        Ok(items) => Ok(items),
+        Err(err) => {
+            if err.is_unauthorized {
+                clear_stored_token(&auth);
+                return Err("not_authenticated".into());
+            }
+            Err(err.message)
+        }
+    }
+}
+
+#[tauri::command]
 pub async fn mark_notification_read(
     thread_id: u64,
     auth: State<'_, Mutex<AppState>>,
@@ -802,11 +852,12 @@ pub async fn mark_notification_read(
     {
         Ok(_) => Ok(()),
         Err(err) => {
-            if is_unauthorized(&err) {
+            let ge = GithubError::from_octocrab(err);
+            if ge.is_unauthorized {
                 clear_stored_token(&auth);
                 return Err("not_authenticated".into());
             }
-            Err(err.to_string())
+            Err(ge.message)
         }
     }
 }
