@@ -18,11 +18,9 @@
   import { onDestroy, onMount } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import {
-    computeItemChanges,
     filterVisible,
     groupByRepo,
     itemKey,
-    relativeTime,
     repoSuggestionsFrom,
   } from "$lib/list";
   import {
@@ -131,11 +129,8 @@
   let settingsIoError = $state<string | null>(null);
   let settingsIoNotice = $state<string | null>(null);
 
-  let prevThreads = new Map<number, string>();
-  let prevItems = new Map<number, WatchedItem>();
-  let hasLoadedOnce = false;
-  let refreshTimer: ReturnType<typeof setInterval> | null = null;
   let unlistenPopupHidden: UnlistenFn | null = null;
+  let unlistenStateUpdated: UnlistenFn | null = null;
   let systemThemeMedia: MediaQueryList | null = null;
   let systemThemeListener: ((e: MediaQueryListEvent) => void) | null = null;
 
@@ -154,7 +149,7 @@
     const m = new Map<string, NotificationItem[]>();
     for (const n of notifications) {
       if (n.number == null) continue;
-      const k = `${n.repo}:${n.kind}:${n.number}`;
+      const k = itemKey({ repo: n.repo, kind: n.kind, number: n.number });
       const existing = m.get(k);
       if (existing) existing.push(n);
       else m.set(k, [n]);
@@ -162,250 +157,77 @@
     return m;
   });
 
-  function updateBadge() {
-    const count = visibleItems.length;
-    const hasUnread = visibleItems.some((i) =>
-      notificationsByKey.has(itemKey(i)),
-    );
-    console.info(`[eir] tray badge → count=${count} hasUnread=${hasUnread}`);
-    void invoke("set_tray_badge", { count, hasUnread });
-  }
+  type StatePayload = {
+    items: WatchedItem[];
+    notifications: NotificationItem[];
+    loading: boolean;
+    last_error: string | null;
+    authenticated: boolean;
+  };
 
-  function startRefresh() {
-    if (refreshTimer) return;
-    refreshTimer = setInterval(() => {
-      void loadItems({ silent: true });
-    }, refreshMs);
-  }
-
-  function restartRefreshIfRunning() {
-    if (!refreshTimer) return;
-    stopRefresh();
-    startRefresh();
-  }
-
-  function stopRefresh() {
-    if (refreshTimer) {
-      clearInterval(refreshTimer);
-      refreshTimer = null;
-    }
-  }
-
-  async function loadItems({ silent = false }: { silent?: boolean } = {}) {
-    loading = true;
-    if (!silent) {
-      error = null;
-    }
-    try {
-      // The "hidden" tab is purely a client-side filter; use the broadest
-      // server query so it can surface anything the user has hidden.
-      const serverTab = activeTab === "hidden" ? "all" : activeTab;
-      const [fetchedItems, fetchedNotifs] = await Promise.all([
-        invoke<WatchedItem[]>("fetch_watched", {
-          tab: serverTab,
-          watchedOrgs: [...watchedOrgs],
-        }),
-        invoke<NotificationItem[]>("fetch_notifications"),
-      ]);
-
-      const nextThreads = new Map(
-        fetchedNotifs.map((n) => [n.thread_id, n.updated_at] as const),
-      );
-
-      if (hasLoadedOnce) {
-        // A thread is "fresh" if we've never seen it before, or if its
-        // updated_at has advanced — comments and other activity bump
-        // updated_at on the same thread_id.
-        const fresh = fetchedNotifs.filter(
-          (n) => prevThreads.get(n.thread_id) !== n.updated_at,
-        );
-
-        // Item-level diff: catches changes GitHub doesn't generate a
-        // notification thread for (another reviewer approved, CI status
-        // flipped, PR merged upstream, etc.). Anything already covered by
-        // the /notifications fresh set is dropped to avoid double-firing.
-        const notifiedKeys = new Set(
-          fresh
-            .filter((n) => n.number != null)
-            .map((n) => `${n.repo}:${n.kind}:${n.number}`),
-        );
-        const itemChanges = computeItemChanges(
-          prevItems,
-          fetchedItems,
-          notifiedKeys,
-        );
-
-        console.info(
-          `[eir] refresh: ${fetchedNotifs.length} unread notifications (${fresh.length} new), ${itemChanges.length} item-level changes`,
-        );
-        // Items in prev but missing from curr disappeared upstream. The
-        // search query is `is:open`, so in practice this means the item was
-        // closed / merged / archived (or moved out of scope, which is rare
-        // enough to tolerate as a false-positive "Closed" ping).
-        const currIds = new Set(fetchedItems.map((i) => i.id));
-        const removed: WatchedItem[] = [];
-        for (const [id, prev] of prevItems) {
-          if (currIds.has(id)) continue;
-          if (notifiedKeys.has(itemKey(prev))) continue;
-          removed.push(prev);
-        }
-
-        if (fresh.length > 0) {
-          await notify(fresh);
-        }
-        if (itemChanges.length > 0) {
-          await notifyItemChanges(itemChanges);
-        }
-        if (removed.length > 0) {
-          const entries = await resolveRemovedStates(removed);
-          await notifyRemoved(entries);
-        }
-      } else {
-        console.info(
-          `[eir] initial load: ${fetchedNotifs.length} unread notifications, ${fetchedItems.length} items (notifications suppressed)`,
-        );
+  function applyState(payload: StatePayload) {
+    items = payload.items;
+    notifications = payload.notifications;
+    loading = payload.loading;
+    if (payload.authenticated) {
+      // Don't knock the UI out of the device-flow "pending" phase; the
+      // worker briefly emits authenticated=false while the token is being
+      // stored, and flipping to idle mid-flow would be jarring.
+      if (phase !== "pending") {
+        phase = "loaded";
       }
-
-      items = fetchedItems;
-      notifications = fetchedNotifs;
-      prevThreads = nextThreads;
-      prevItems = new Map(fetchedItems.map((i) => [i.id, i]));
-      hasLoadedOnce = true;
-      phase = "loaded";
-      updateBadge();
-      startRefresh();
-    } catch (e) {
-      const msg = String(e);
-      if (msg.includes("not_authenticated")) {
-        resetToIdle();
-      } else if (!silent) {
-        error = msg;
-      }
-    } finally {
-      loading = false;
+    } else if (phase !== "pending") {
+      phase = "idle";
     }
+    error =
+      payload.last_error && payload.last_error !== "not_authenticated"
+        ? payload.last_error
+        : null;
   }
 
-  function resetToIdle() {
-    stopRefresh();
-    items = [];
-    notifications = [];
-    prevThreads = new Map();
-    prevItems = new Map();
-    hasLoadedOnce = false;
-    phase = "idle";
-    void invoke("set_tray_badge", { count: 0 });
+  // `hidden` is a client-side filter; the worker queries with "all" and the
+  // frontend narrows down via `filterVisible`.
+  function serverTab(tab: Tab): Tab | "all" {
+    return tab === "hidden" ? "all" : tab;
   }
 
-  function reasonLabel(reason: string): string {
-    switch (reason) {
-      case "review_requested":
-        return "Review requested";
-      case "mention":
-        return "You were mentioned";
-      case "team_mention":
-        return "Your team was mentioned";
-      case "comment":
-        return "New comment";
-      case "assign":
-        return "Assigned to you";
-      case "author":
-        return "Activity on your PR";
-      case "state_change":
-        return "State changed";
-      case "ci_activity":
-        return "CI update";
-      default:
-        return "New activity";
-    }
-  }
-
-  type RemovedEntry = { item: WatchedItem; state: string };
-
-  async function notifyRemoved(entries: RemovedEntry[]) {
-    if (!notifyEnabled) return;
-    if (!(await ensureNotificationPermission())) return;
-    for (const { item, state } of entries) {
-      const title = state === "merged" ? "Merged" : "Closed";
-      console.info(
-        `[eir] sending removal notification: ${title} — ${item.repo}#${item.number}`,
-      );
-      showNotification(
-        title,
-        `${item.repo}#${item.number} — ${item.title}`,
-        item.url,
-      );
-    }
-  }
-
-  async function resolveRemovedStates(
-    removed: WatchedItem[],
-  ): Promise<RemovedEntry[]> {
-    if (removed.length === 0) return [];
-    const refs = removed.map((i) => ({
-      repo: i.repo,
-      kind: i.kind,
-      number: i.number,
-    }));
-    type StateRow = {
-      repo: string;
-      kind: "pr" | "issue";
-      number: number;
-      state: string;
-    };
-    // A failed lookup (network blip, rate limit, etc.) shouldn't suppress the
-    // whole batch — fall back to an empty map so each item ends up labelled
-    // "Closed" by default, which is still better than silence.
-    const states = await invoke<StateRow[]>("fetch_item_states", {
-      items: refs,
-    }).catch((err) => {
-      console.warn("[eir] fetch_item_states failed:", err);
-      return [] as StateRow[];
-    });
-    const byKey = new Map<string, string>(
-      states.map((s) => [`${s.repo}:${s.kind}:${s.number}`, s.state]),
-    );
-    return removed.map((item) => ({
-      item,
-      state: byKey.get(itemKey(item)) ?? "closed",
-    }));
-  }
-
-  async function notifyItemChanges(
-    changes: { item: WatchedItem; reason: string }[],
+  async function pushBackgroundConfig(
+    patch: {
+      tab?: Tab;
+      intervalMs?: number;
+      notifyEnabled?: boolean;
+      watchedOrgs?: string[];
+      excludedRepos?: string[];
+      hiddenItems?: number[];
+    } = {},
   ) {
-    if (!notifyEnabled) return;
-    if (!(await ensureNotificationPermission())) return;
-    for (const { item, reason } of changes) {
-      console.info(
-        `[eir] sending item-change notification: ${reason} — ${item.repo}#${item.number}`,
-      );
-      showNotification(
-        reason,
-        `${item.repo}#${item.number} — ${item.title}`,
-        item.url,
-      );
-    }
+    await invoke("set_background_config", {
+      config: {
+        tab: patch.tab != null ? serverTab(patch.tab) : undefined,
+        intervalMs: patch.intervalMs,
+        notifyEnabled: patch.notifyEnabled,
+        watchedOrgs: patch.watchedOrgs,
+        excludedRepos: patch.excludedRepos,
+        hiddenItems: patch.hiddenItems,
+      },
+    }).catch((e) => console.warn("[eir] set_background_config failed:", e));
   }
 
-  async function notify(fresh: NotificationItem[]) {
-    if (!notifyEnabled) {
-      console.info("[eir] notify skipped: notifications disabled in settings");
-      return;
-    }
-    if (!(await ensureNotificationPermission())) {
-      console.warn(
-        "[eir] notify skipped: OS notification permission not granted",
-      );
-      return;
-    }
-    for (const n of fresh) {
-      const suffix = n.number != null ? `${n.repo}#${n.number}` : n.repo;
-      console.info(
-        `[eir] sending notification: ${reasonLabel(n.reason)} — ${suffix}`,
-      );
-      showNotification(reasonLabel(n.reason), `${suffix} — ${n.title}`, n.url);
-    }
+  async function pushFullConfig() {
+    await pushBackgroundConfig({
+      tab: activeTab,
+      intervalMs: refreshMs,
+      notifyEnabled,
+      watchedOrgs: [...watchedOrgs],
+      excludedRepos: [...excludedRepos],
+      hiddenItems: [...hiddenItems],
+    });
+  }
+
+  function triggerRefresh() {
+    void invoke("trigger_refresh").catch((e) =>
+      console.warn("[eir] trigger_refresh failed:", e),
+    );
   }
 
   async function toggleAutostart(enabled: boolean) {
@@ -534,15 +356,30 @@
     // the first item selected, so a fresh open feels like a fresh glance.
     void listen("popup-hidden", () => {
       showingSettings = false;
-      // Clear selection so the $effect picks flatItems[0] on next render;
-      // this also snaps keyboard nav back to the top.
+      // Clear selection so the $effect picks flatItems[0] on next render.
       selectedId = null;
     }).then((fn) => {
       unlistenPopupHidden = fn;
     });
-    void loadItems({ silent: true });
-    // Silent update check on boot — if a new version is out, the Settings
-    // button will show "Update available" and the user can choose to install.
+    void listen<StatePayload>("state-updated", (evt) => {
+      applyState(evt.payload);
+    }).then((fn) => {
+      unlistenStateUpdated = fn;
+    });
+
+    // Push persisted config into the worker so its filters match ours
+    // before the first emit. A tab/orgs mismatch auto-triggers a refresh.
+    await pushFullConfig();
+
+    // Defensive read: if the worker's first emit fired between spawn_worker
+    // and our `listen` attaching, we'd miss it — pull the current snapshot.
+    try {
+      const initial = await invoke<StatePayload>("get_background_state");
+      applyState(initial);
+    } catch (e) {
+      console.warn("[eir] get_background_state failed:", e);
+    }
+
     void runUpdateCheck({ interactive: false });
 
     // Kick the permission dialog early so the first real notification isn't
@@ -563,11 +400,12 @@
   });
 
   onDestroy(() => {
-    stopRefresh();
     window.removeEventListener("keydown", handleGlobalKey);
     document.removeEventListener("visibilitychange", handleVisibilityChange);
     unlistenPopupHidden?.();
     unlistenPopupHidden = null;
+    unlistenStateUpdated?.();
+    unlistenStateUpdated = null;
     if (systemThemeMedia && systemThemeListener) {
       systemThemeMedia.removeEventListener("change", systemThemeListener);
     }
@@ -579,6 +417,9 @@
     if (document.visibilityState !== "visible") return;
     const list = document.querySelector<HTMLElement>(".list");
     if (list) list.scrollTop = 0;
+    // Opening the popup is an implicit "what's new?" — the worker's interval
+    // fires at most every refreshMs, which can be minutes.
+    triggerRefresh();
   }
 
   function formatShortcut(e: KeyboardEvent): string | null {
@@ -711,8 +552,9 @@
       });
       deviceCode = null;
       copied = false;
-      hasLoadedOnce = false;
-      await loadItems();
+      // `poll_device_flow` triggers a refresh on the Rust side; show the
+      // list shell while the first fetch populates it via state-updated.
+      phase = "loaded";
     } catch (e) {
       error = String(e);
       phase = "idle";
@@ -723,7 +565,6 @@
 
   async function signOut() {
     await invoke("sign_out");
-    resetToIdle();
   }
 
   async function copyCode() {
@@ -739,13 +580,16 @@
 
   async function clearNotificationThreads(threadIds: Set<number>) {
     if (threadIds.size === 0) return;
+    // Optimistic: drop threads locally so the unread dot disappears on
+    // click. The next state-updated overwrites this, but only after the
+    // mark-as-read calls below land on GitHub, so they stay dropped.
     notifications = notifications.filter((n) => !threadIds.has(n.thread_id));
-    updateBadge();
     await Promise.all(
       [...threadIds].map((threadId) =>
         invoke("mark_notification_read", { threadId }).catch(() => {}),
       ),
     );
+    triggerRefresh();
   }
 
   async function openItem(item: WatchedItem) {
@@ -778,24 +622,25 @@
   function onIntervalChange(value: number) {
     refreshMs = value;
     persistInterval(value);
-    restartRefreshIfRunning();
+    void pushBackgroundConfig({ intervalMs: value });
   }
 
   function onNotifyChange(enabled: boolean) {
     notifyEnabled = enabled;
     persistNotify(enabled);
+    void pushBackgroundConfig({ notifyEnabled: enabled });
   }
 
   function hideItem(id: number) {
     hiddenItems.add(id);
     persistHiddenItems(hiddenItems);
-    updateBadge();
+    void pushBackgroundConfig({ hiddenItems: [...hiddenItems] });
   }
 
   function unhideItem(id: number) {
     hiddenItems.delete(id);
     persistHiddenItems(hiddenItems);
-    updateBadge();
+    void pushBackgroundConfig({ hiddenItems: [...hiddenItems] });
   }
 
   function addExcludedRepo() {
@@ -804,13 +649,13 @@
     excludedRepos.add(name);
     persistExcludedRepos(excludedRepos);
     newExcludedRepo = "";
-    updateBadge();
+    void pushBackgroundConfig({ excludedRepos: [...excludedRepos] });
   }
 
   function removeExcludedRepo(repo: string) {
     excludedRepos.delete(repo);
     persistExcludedRepos(excludedRepos);
-    updateBadge();
+    void pushBackgroundConfig({ excludedRepos: [...excludedRepos] });
   }
 
   async function addWatchedOrg() {
@@ -822,28 +667,23 @@
     watchedOrgs.add(clean);
     persistWatchedOrgs(watchedOrgs);
     newWatchedOrg = "";
-    // Broaden the server-side query immediately by refetching.
-    await loadItems({ silent: true });
+    await pushBackgroundConfig({ watchedOrgs: [...watchedOrgs] });
   }
 
   async function removeWatchedOrg(org: string) {
     watchedOrgs.delete(org);
     persistWatchedOrgs(watchedOrgs);
-    await loadItems({ silent: true });
+    await pushBackgroundConfig({ watchedOrgs: [...watchedOrgs] });
   }
 
   async function switchTab(tab: Tab) {
     if (tab === activeTab) return;
     activeTab = tab;
     persistTab(tab);
+    // Clear locally so the old tab's items don't linger until the worker's
+    // emit arrives. The worker resets its diff anchors on tab change.
     items = [];
-    // The diff anchors are per-tab: a different query returns a different
-    // set, so disappearing items aren't real closures and new items aren't
-    // genuinely new. Reset before refetching.
-    prevItems = new Map();
-    prevThreads = new Map();
-    hasLoadedOnce = false;
-    await loadItems();
+    await pushBackgroundConfig({ tab });
   }
 
   const SETTINGS_EXPORT_VERSION = 1;
@@ -990,9 +830,7 @@
       applied.push("toggle shortcut");
     }
 
-    updateBadge();
-    // Re-fetch so excluded-repo/watched-org changes hit the server query.
-    void loadItems({ silent: true });
+    void pushFullConfig();
 
     settingsIoError = null;
     const suffix = sourcePath ? ` from ${sourcePath}` : "";
@@ -1161,7 +999,7 @@
       {notificationsByKey}
       tabs={TABS}
       {error}
-      onRefresh={() => loadItems()}
+      onRefresh={triggerRefresh}
       onMarkAllVisibleAsRead={markAllVisibleAsRead}
       onShowSettings={() => (showingSettings = true)}
       onSignOut={signOut}

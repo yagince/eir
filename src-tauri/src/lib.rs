@@ -1,4 +1,6 @@
 mod auth;
+mod background;
+mod diff;
 mod github;
 mod settings_io;
 mod shortcut;
@@ -11,6 +13,7 @@ use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use crate::auth::AppState;
+use crate::background::BackgroundHandle;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -42,6 +45,7 @@ pub fn run() {
                 .build(),
         )
         .manage(Mutex::new(AppState::with_stored_token()))
+        .manage(BackgroundHandle::new())
         .invoke_handler(tauri::generate_handler![
             auth::start_device_flow,
             auth::poll_device_flow,
@@ -57,6 +61,9 @@ pub fn run() {
             shortcut::set_toggle_shortcut,
             settings_io::write_text_file,
             settings_io::read_text_file,
+            background::get_background_state,
+            background::trigger_refresh,
+            background::set_background_config,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -66,6 +73,11 @@ pub fn run() {
             let parsed = shortcut::parse_shortcut(&stored)
                 .or_else(|_| shortcut::parse_shortcut(shortcut::DEFAULT_SHORTCUT))?;
             app.global_shortcut().register(parsed)?;
+
+            // Fetch loop runs in Rust so updates keep flowing while the
+            // popup is hidden — WKWebView throttles JS timers then.
+            let handle = app.state::<BackgroundHandle>().inner().clone();
+            background::spawn_worker(app.handle().clone(), handle);
             Ok(())
         })
         .on_window_event(|window, event| {

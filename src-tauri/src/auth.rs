@@ -183,6 +183,8 @@ pub async fn poll_device_flow(
                     let _ = window.show();
                     let _ = window.set_focus();
                 }
+                app.state::<crate::background::BackgroundHandle>()
+                    .trigger_refresh();
                 return Ok(());
             }
             TokenResponse::Error { error, .. } => match error.as_str() {
@@ -203,8 +205,13 @@ pub fn clear_stored_token(auth: &Mutex<AppState>) {
 }
 
 #[tauri::command]
-pub fn sign_out(auth: State<'_, Mutex<AppState>>) {
+pub fn sign_out(
+    auth: State<'_, Mutex<AppState>>,
+    bg: State<'_, crate::background::BackgroundHandle>,
+    app: tauri::AppHandle,
+) {
     clear_stored_token(&auth);
+    bg.clear_and_notify(&app);
 }
 
 #[tauri::command]
