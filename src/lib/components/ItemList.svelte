@@ -73,14 +73,19 @@
 </script>
 
 <header class="toolbar">
-  <button class="refresh" onclick={onRefresh} disabled={loading}>
+  <button
+    class="refresh"
+    onclick={onRefresh}
+    disabled={loading}
+    title="Refresh (⌘R)"
+  >
     {loading ? "Refreshing…" : "Refresh"}
   </button>
   {#if visibleUnreadCount > 0}
     <button
       class="icon-btn"
       onclick={onMarkAllVisibleAsRead}
-      title="Mark {visibleUnreadCount} as read"
+      title="Mark {visibleUnreadCount} as read (⌘⇧A)"
       aria-label="Mark all as read"
     >
       <svg
@@ -100,7 +105,7 @@
   <button
     class="icon-btn"
     onclick={onShowSettings}
-    title="Settings"
+    title="Settings (⌘,)"
     aria-label="Settings"
   >
     <svg

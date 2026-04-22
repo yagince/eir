@@ -510,6 +510,31 @@
         return;
       }
 
+      // Cmd/Ctrl+R — reload. preventDefault is important: the webview's
+      // default binding would otherwise reload the SPA and drop all state.
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        !e.shiftKey &&
+        !e.altKey &&
+        e.key.toLowerCase() === "r"
+      ) {
+        e.preventDefault();
+        if (!loading) triggerRefresh();
+        return;
+      }
+
+      // Cmd/Ctrl+Shift+A — mark all visible as read.
+      if (
+        (e.metaKey || e.ctrlKey) &&
+        e.shiftKey &&
+        !e.altKey &&
+        e.key.toLowerCase() === "a"
+      ) {
+        e.preventDefault();
+        if (visibleUnreadCount > 0) void markAllVisibleAsRead();
+        return;
+      }
+
       switch (e.key) {
         case "ArrowDown":
           moveSelection(1);

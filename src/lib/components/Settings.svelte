@@ -297,10 +297,70 @@
       {/if}
     </div>
 
-    <p class="setting-hint">
-      <kbd>Cmd</kbd>+<kbd>,</kbd> opens settings ·
-      <kbd>Backspace</kbd> goes back.
-    </p>
+    <div class="setting-section">
+      <span class="setting-label">Keyboard shortcuts</span>
+      <dl class="shortcut-list">
+        <div class="shortcut-item">
+          <dt>
+            Toggle popup
+            <span class="shortcut-scope" title="Works even when the popup is hidden">global</span>
+          </dt>
+          <dd>
+            {#each toggleShortcut.split("+") as part, i (i)}
+              {#if i > 0}<span class="shortcut-plus">+</span>{/if}<kbd>{part}</kbd>
+            {/each}
+          </dd>
+        </div>
+        <div class="shortcut-item">
+          <dt>Reload</dt>
+          <dd><kbd>Cmd</kbd><span class="shortcut-plus">+</span><kbd>R</kbd></dd>
+        </div>
+        <div class="shortcut-item">
+          <dt>Mark all as read</dt>
+          <dd>
+            <kbd>Cmd</kbd><span class="shortcut-plus">+</span><kbd>Shift</kbd
+            ><span class="shortcut-plus">+</span><kbd>A</kbd>
+          </dd>
+        </div>
+        <div class="shortcut-item">
+          <dt>Open settings</dt>
+          <dd><kbd>Cmd</kbd><span class="shortcut-plus">+</span><kbd>,</kbd></dd>
+        </div>
+        <div class="shortcut-item">
+          <dt>Back to list</dt>
+          <dd><kbd>Backspace</kbd></dd>
+        </div>
+        <div class="shortcut-item">
+          <dt>Search</dt>
+          <dd>
+            <kbd>Cmd</kbd><span class="shortcut-plus">+</span><kbd>F</kbd>
+            <span class="shortcut-or">or</span> <kbd>/</kbd>
+          </dd>
+        </div>
+        <div class="shortcut-item">
+          <dt>Select item</dt>
+          <dd><kbd>↑</kbd> <kbd>↓</kbd></dd>
+        </div>
+        <div class="shortcut-item">
+          <dt>Switch tab</dt>
+          <dd><kbd>←</kbd> <kbd>→</kbd></dd>
+        </div>
+        <div class="shortcut-item">
+          <dt>Open selected</dt>
+          <dd><kbd>Enter</kbd></dd>
+        </div>
+        <div class="shortcut-item">
+          <dt>Scroll</dt>
+          <dd>
+            <kbd>PageUp</kbd> <kbd>PageDown</kbd> <kbd>Home</kbd> <kbd>End</kbd>
+          </dd>
+        </div>
+      </dl>
+      <p class="setting-hint">
+        <span class="shortcut-scope">global</span> works when the popup is hidden.
+        The rest require the popup to be focused.
+      </p>
+    </div>
     {#if error}
       <p class="error">{error}</p>
     {/if}
@@ -369,15 +429,6 @@
     margin: 8px 0 0;
     font-size: 11px;
     color: var(--fg-muted);
-  }
-
-  .setting-hint kbd {
-    font-family: "SF Mono", Menlo, monospace;
-    font-size: 10px;
-    padding: 1px 4px;
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    background: var(--surface-1);
   }
 
   .shortcut-capture {
@@ -477,5 +528,67 @@
     background: var(--surface-1);
     color: inherit;
     min-width: 0;
+  }
+
+  .shortcut-list {
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .shortcut-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    font-size: 12px;
+  }
+
+  .shortcut-item dt {
+    color: var(--fg-muted);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .shortcut-item dd {
+    margin: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+  }
+
+  .shortcut-list kbd {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 10px;
+    padding: 1px 5px;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--surface-1);
+    color: inherit;
+  }
+
+  .shortcut-plus {
+    opacity: 0.5;
+    font-size: 10px;
+  }
+
+  .shortcut-or {
+    opacity: 0.55;
+    font-size: 11px;
+    margin: 0 2px;
+  }
+
+  .shortcut-scope {
+    padding: 1px 6px;
+    font-size: 9px;
+    font-weight: 600;
+    color: var(--accent);
+    background: var(--accent-bg);
+    border-radius: 8px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
   }
 </style>
