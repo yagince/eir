@@ -53,6 +53,18 @@ export function isEditableTarget(target: EventTarget | null): boolean {
   return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
+// Text-caret targets — places where arrow keys move the caret natively and
+// must not be hijacked. Narrower than `isEditableTarget`: SELECT and checkbox
+// INPUTs are fine to intercept for focus navigation.
+export function isTextCaretTarget(target: EventTarget | null): boolean {
+  if (target instanceof HTMLTextAreaElement) return true;
+  if (target instanceof HTMLInputElement) {
+    const type = target.type;
+    return type !== "checkbox" && type !== "radio";
+  }
+  return false;
+}
+
 export function dispatchShortcut(e: KeyboardEvent, defs: Shortcut[]): boolean {
   const inField = isEditableTarget(e.target);
   for (const def of defs) {

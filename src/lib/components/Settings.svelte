@@ -1,7 +1,9 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import type { Update } from "@tauri-apps/plugin-updater";
   import type { Theme } from "$lib/storage";
+  import { isTextCaretTarget } from "$lib/shortcuts";
 
   type UpdateStatus =
     | { kind: "idle" }
@@ -87,11 +89,54 @@
     onExportSettings,
     onImportSettings,
   }: Props = $props();
+
+  let sectionEl: HTMLElement | undefined;
+  let backEl: HTMLButtonElement | undefined;
+
+  onMount(() => {
+    backEl?.focus();
+    window.addEventListener("keydown", handleArrowNav);
+    return () => window.removeEventListener("keydown", handleArrowNav);
+  });
+
+  function focusableItems(): HTMLElement[] {
+    if (!sectionEl) return [];
+    const els = sectionEl.querySelectorAll<
+      HTMLButtonElement | HTMLInputElement | HTMLSelectElement
+    >("button, select, input");
+    return Array.from(els).filter(
+      (el) => !el.disabled && el.offsetParent !== null,
+    );
+  }
+
+  function handleArrowNav(e: KeyboardEvent) {
+    if (capturingShortcut) return;
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    // Text fields use arrows to move the caret natively — don't hijack.
+    if (isTextCaretTarget(document.activeElement)) return;
+
+    const items = focusableItems();
+    if (items.length === 0) return;
+
+    const active = document.activeElement as HTMLElement | null;
+    const currentIdx = active ? items.indexOf(active) : -1;
+    const delta = e.key === "ArrowDown" ? 1 : -1;
+
+    let nextIdx: number;
+    if (currentIdx === -1) {
+      nextIdx = delta === 1 ? 0 : items.length - 1;
+    } else {
+      nextIdx = (currentIdx + delta + items.length) % items.length;
+    }
+
+    e.preventDefault();
+    items[nextIdx].focus();
+  }
 </script>
 
-<section class="settings">
+<section class="settings" bind:this={sectionEl}>
   <div class="settings-header">
-    <button class="back" onclick={onBack}>← Back</button>
+    <button class="back" bind:this={backEl} onclick={onBack}>← Back</button>
   </div>
   <div class="settings-body">
     <label class="setting-row">
@@ -354,6 +399,10 @@
           <dd>
             <kbd>PageUp</kbd> <kbd>PageDown</kbd> <kbd>Home</kbd> <kbd>End</kbd>
           </dd>
+        </div>
+        <div class="shortcut-item">
+          <dt>Navigate settings</dt>
+          <dd><kbd>↑</kbd> <kbd>↓</kbd></dd>
         </div>
       </dl>
       <p class="setting-hint">

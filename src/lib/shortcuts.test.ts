@@ -1,5 +1,11 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
-import { dispatchShortcut, matchShortcut, type Shortcut } from "./shortcuts";
+import {
+  dispatchShortcut,
+  isTextCaretTarget,
+  matchShortcut,
+  type Shortcut,
+} from "./shortcuts";
 
 function event(
   key: string,
@@ -60,6 +66,33 @@ describe("matchShortcut", () => {
     const def: Shortcut = { key: "Backspace", run: () => {} };
     expect(matchShortcut(event("Backspace"), def)).toBe(true);
     expect(matchShortcut(event("Enter"), def)).toBe(false);
+  });
+});
+
+describe("isTextCaretTarget", () => {
+  it("returns true for textareas and text-type inputs", () => {
+    const textarea = document.createElement("textarea");
+    const text = document.createElement("input");
+    text.type = "text";
+    const search = document.createElement("input");
+    search.type = "search";
+    expect(isTextCaretTarget(textarea)).toBe(true);
+    expect(isTextCaretTarget(text)).toBe(true);
+    expect(isTextCaretTarget(search)).toBe(true);
+  });
+
+  it("returns false for checkboxes, radios, buttons, selects", () => {
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    const btn = document.createElement("button");
+    const select = document.createElement("select");
+    expect(isTextCaretTarget(check)).toBe(false);
+    expect(isTextCaretTarget(radio)).toBe(false);
+    expect(isTextCaretTarget(btn)).toBe(false);
+    expect(isTextCaretTarget(select)).toBe(false);
+    expect(isTextCaretTarget(null)).toBe(false);
   });
 });
 
