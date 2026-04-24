@@ -46,6 +46,7 @@
     type Theme,
   } from "$lib/storage";
   import type { NotificationItem, Tab, WatchedItem } from "$lib/types";
+  import { dispatchShortcut, isEditableTarget, type Shortcut } from "$lib/shortcuts";
   import Auth from "$lib/components/Auth.svelte";
   import ItemList from "$lib/components/ItemList.svelte";
   import Settings from "$lib/components/Settings.svelte";
@@ -452,6 +453,59 @@
     return parts.join("+");
   }
 
+  const inLoadedPage = () => phase === "loaded" && !showingSettings;
+
+  const shortcuts: Shortcut[] = [
+    {
+      key: "Backspace",
+      when: () => showingSettings,
+      run: () => {
+        showingSettings = false;
+      },
+    },
+    {
+      key: ",",
+      mods: ["cmd"],
+      allowInInput: true,
+      when: inLoadedPage,
+      run: () => {
+        showingSettings = true;
+      },
+    },
+    {
+      key: "/",
+      when: inLoadedPage,
+      run: openSearch,
+    },
+    {
+      key: "f",
+      mods: ["cmdOrCtrl"],
+      when: inLoadedPage,
+      run: openSearch,
+    },
+    {
+      key: "r",
+      mods: ["cmdOrCtrl"],
+      when: inLoadedPage,
+      run: () => {
+        if (!loading) triggerRefresh();
+      },
+    },
+    {
+      key: "a",
+      mods: ["cmdOrCtrl", "shift"],
+      when: inLoadedPage,
+      run: () => {
+        if (visibleUnreadCount > 0) void markAllVisibleAsRead();
+      },
+    },
+    {
+      key: "u",
+      when: inLoadedPage,
+      run: toggleUnreadOnly,
+    },
+  ];
+
   async function handleGlobalKey(e: KeyboardEvent) {
     if (capturingShortcut) {
       e.preventDefault();
@@ -474,66 +528,10 @@
       return;
     }
 
-    if (e.key === "Backspace" && showingSettings) {
-      const target = e.target as HTMLElement | null;
-      const tag = target?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") return;
-      e.preventDefault();
-      showingSettings = false;
-      return;
-    }
+    if (dispatchShortcut(e, shortcuts)) return;
 
-    // macOS convention: Cmd+, opens the Preferences / Settings pane.
-    if (e.metaKey && e.key === "," && !showingSettings && phase === "loaded") {
-      e.preventDefault();
-      showingSettings = true;
-      return;
-    }
-
-    // Arrow keys walk the selection, Enter opens, Page/Home/End still scroll.
     if (phase === "loaded" && !showingSettings) {
-      const target = e.target as HTMLElement | null;
-      const tag = target?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-
-      // "/" or Cmd/Ctrl+F reveals the search input and moves focus to it.
-      // `/` alone is only grabbed when no modifier is held — otherwise
-      // Shift+/ (which also produces "?") could hijack other shortcuts.
-      if (e.key === "/" && !e.metaKey && !e.ctrlKey && !e.altKey) {
-        e.preventDefault();
-        openSearch();
-        return;
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "f") {
-        e.preventDefault();
-        openSearch();
-        return;
-      }
-
-      // Cmd/Ctrl+R — reload. preventDefault is important: the webview's
-      // default binding would otherwise reload the SPA and drop all state.
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        !e.shiftKey &&
-        !e.altKey &&
-        e.key.toLowerCase() === "r"
-      ) {
-        e.preventDefault();
-        if (!loading) triggerRefresh();
-        return;
-      }
-
-      // Cmd/Ctrl+Shift+A — mark all visible as read.
-      if (
-        (e.metaKey || e.ctrlKey) &&
-        e.shiftKey &&
-        !e.altKey &&
-        e.key.toLowerCase() === "a"
-      ) {
-        e.preventDefault();
-        if (visibleUnreadCount > 0) void markAllVisibleAsRead();
-        return;
-      }
+      if (isEditableTarget(e.target)) return;
 
       switch (e.key) {
         case "ArrowDown":

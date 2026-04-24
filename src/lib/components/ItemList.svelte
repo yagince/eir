@@ -146,7 +146,7 @@
     class:active={unreadOnly}
     onclick={onToggleUnreadOnly}
     aria-pressed={unreadOnly}
-    title={unreadOnly ? "Showing unread only — click to show all" : "Show only unread items"}
+    title={unreadOnly ? "Showing unread only — click or press U to show all" : "Show only unread items (U)"}
   >
     <span class="filter-dot" aria-hidden="true"></span>
     <span class="filter-label">Unread only</span>
