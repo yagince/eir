@@ -622,6 +622,9 @@
     display: flex;
     align-items: stretch;
     gap: 2px;
+    /* scrollIntoView doesn't know about the sticky .group-header, so without
+       this margin ArrowUp to the top item leaves it tucked under the header. */
+    scroll-margin-top: 28px;
   }
 
   .item {
