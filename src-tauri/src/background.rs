@@ -53,6 +53,14 @@ pub struct BackgroundState {
     pub last_error: Option<String>,
     pub authenticated: bool,
 
+    /// Flipped to true the first time the frontend pushes its persisted
+    /// config. Until then the worker stays parked — kicking off a cycle
+    /// with the default tab/orgs would fetch one set of items, then the
+    /// real config arrives and overwrites tab/orgs; the next cycle would
+    /// diff against the old snapshot and fire "Closed" notifications for
+    /// every item the new filters dropped.
+    pub config_applied: bool,
+
     pub has_loaded_once: bool,
     pub prev_items: HashMap<u64, WatchedItem>,
     pub prev_thread_updated_at: HashMap<u64, String>,
@@ -433,6 +441,11 @@ pub fn spawn_worker(app: AppHandle, handle: BackgroundHandle) {
     handle.with_state(|s| s.authenticated = has_token);
 
     tauri::async_runtime::spawn(async move {
+        // Park until the frontend has pushed its persisted config at
+        // least once. See BackgroundState::config_applied for why.
+        while !handle.with_state(|s| s.config_applied) {
+            handle.wake.notified().await;
+        }
         loop {
             run_cycle(&app, &handle).await;
             let interval_ms = handle.with_state(|s| s.interval_ms.max(MIN_INTERVAL_MS));
@@ -475,7 +488,13 @@ pub fn set_background_config(
     // so we reset the diff anchors and wake the worker. `badge_dirty` is
     // the filter-only path that doesn't need a refetch.
     let (trigger, badge_dirty) = handle.with_state(|s| {
-        let mut trigger = false;
+        // First push from the frontend always wakes the worker — the
+        // main loop is parked on `config_applied` and the tab/orgs may
+        // happen to equal the defaults, which would leave `trigger`
+        // false and strand the worker forever.
+        let first_apply = !s.config_applied;
+        s.config_applied = true;
+        let mut trigger = first_apply;
         let mut badge_dirty = false;
         if let Some(tab) = config.tab {
             if tab != s.tab {
