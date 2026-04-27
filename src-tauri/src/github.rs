@@ -172,6 +172,25 @@ fragment PrFields on PullRequest {
         ... on User { avatarUrl }
         ... on Bot { avatarUrl }
       }
+      bodyText
+      createdAt
+      url
+    }
+  }
+  reviewThreads(last: 20) {
+    nodes {
+      comments(last: 1) {
+        nodes {
+          author {
+            login
+            ... on User { avatarUrl }
+            ... on Bot { avatarUrl }
+          }
+          bodyText
+          createdAt
+          url
+        }
+      }
     }
   }
   reviewRequests(first: 10) {
@@ -277,6 +296,8 @@ struct PrNode {
     repository: RepoNode,
     author: Option<AuthorNode>,
     reviews: NodeList<ReviewNode>,
+    #[serde(default)]
+    review_threads: NodeList<ReviewThreadNode>,
     review_requests: NodeList<ReviewRequestNode>,
     commits: NodeList<PrCommitNode>,
 }
@@ -298,6 +319,7 @@ struct IssueNode {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct IssueCommentsNode {
+    #[serde(default)]
     total_count: u32,
     #[serde(default)]
     nodes: Vec<Option<IssueCommentNode>>,
@@ -333,10 +355,28 @@ struct NodeList<T> {
     nodes: Vec<Option<T>>,
 }
 
+impl<T> Default for NodeList<T> {
+    fn default() -> Self {
+        Self { nodes: Vec::new() }
+    }
+}
+
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ReviewNode {
     state: String,
     author: Option<AuthorNode>,
+    #[serde(default)]
+    body_text: String,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    url: String,
+}
+
+#[derive(Deserialize)]
+struct ReviewThreadNode {
+    comments: IssueCommentsNode,
 }
 
 #[derive(Deserialize)]
@@ -369,25 +409,66 @@ struct StatusCheckRollup {
     state: String,
 }
 
+fn build_latest_comment(
+    author: Option<&AuthorNode>,
+    body_text: &str,
+    created_at: &str,
+    url: &str,
+) -> Option<LatestComment> {
+    let author = author?;
+    Some(LatestComment {
+        author: author.login.clone(),
+        author_avatar: author.avatar_url.clone().unwrap_or_default(),
+        body_text: body_text.to_string(),
+        created_at: created_at.to_string(),
+        url: url.to_string(),
+    })
+}
+
 /// Pick the most recent comment with a real author from a `comments(last: N)`
 /// slice. GraphQL returns the slice oldest→newest, so the back of the vec is
 /// the newest. Anonymous (deleted-user) comments are skipped — there's no
 /// useful "@author" to display.
 fn latest_comment_from(nodes: &[Option<IssueCommentNode>]) -> Option<LatestComment> {
-    for slot in nodes.iter().rev() {
-        let Some(node) = slot else { continue };
-        let Some(author) = node.author.as_ref() else {
-            continue;
-        };
-        return Some(LatestComment {
-            author: author.login.clone(),
-            author_avatar: author.avatar_url.clone().unwrap_or_default(),
-            body_text: node.body_text.clone(),
-            created_at: node.created_at.clone(),
-            url: node.url.clone(),
-        });
-    }
-    None
+    nodes
+        .iter()
+        .rev()
+        .filter_map(|s| s.as_ref())
+        .find_map(|n| build_latest_comment(n.author.as_ref(), &n.body_text, &n.created_at, &n.url))
+}
+
+/// Empty-body reviews (a bare "approved") are skipped — `@author:` with
+/// nothing behind it is noise.
+fn latest_review_with_body(reviews: &[Option<ReviewNode>]) -> Option<LatestComment> {
+    reviews
+        .iter()
+        .rev()
+        .filter_map(|s| s.as_ref())
+        .filter(|r| !r.body_text.trim().is_empty())
+        .find_map(|r| build_latest_comment(r.author.as_ref(), &r.body_text, &r.created_at, &r.url))
+}
+
+/// `comments(last: 1)` on a PR alone misses the common case where recent
+/// activity is inline review-thread chatter; we union the three GraphQL
+/// surfaces and pick by createdAt.
+fn pick_latest_pr_comment(
+    issue_comments: &[Option<IssueCommentNode>],
+    reviews: &[Option<ReviewNode>],
+    review_threads: &[Option<ReviewThreadNode>],
+) -> Option<LatestComment> {
+    [
+        latest_comment_from(issue_comments),
+        latest_review_with_body(reviews),
+    ]
+    .into_iter()
+    .flatten()
+    .chain(
+        review_threads
+            .iter()
+            .filter_map(|s| s.as_ref())
+            .filter_map(|t| latest_comment_from(&t.comments.nodes)),
+    )
+    .max_by(|a, b| a.created_at.cmp(&b.created_at))
 }
 
 fn map_item_state(raw: &str) -> &'static str {
@@ -421,27 +502,37 @@ fn pr_to_item(pr: PrNode) -> WatchedItem {
         .and_then(|a| a.avatar_url.clone())
         .unwrap_or_default();
 
+    let latest_comment = pick_latest_pr_comment(
+        &pr.comments.nodes,
+        &pr.reviews.nodes,
+        &pr.review_threads.nodes,
+    );
+
     // Latest substantive review state per user. "Commented" is preserved
     // only if there's no stronger signal (approved / changes_requested /
     // dismissed) yet. A reviewer who approved then left a plain comment
     // still reads as "approved", matching GitHub's own review UI.
     let mut latest: std::collections::HashMap<String, (String, &'static str)> =
         std::collections::HashMap::new();
-    for r in pr.reviews.nodes.into_iter().flatten() {
-        let Some(user) = r.author else { continue };
-        let avatar = user.avatar_url.unwrap_or_default();
+    for r in pr.reviews.nodes.iter().flatten() {
+        let Some(user) = r.author.as_ref() else {
+            continue;
+        };
+        let avatar = user.avatar_url.clone().unwrap_or_default();
         match r.state.as_str() {
             "APPROVED" => {
-                latest.insert(user.login, (avatar, "approved"));
+                latest.insert(user.login.clone(), (avatar, "approved"));
             }
             "CHANGES_REQUESTED" => {
-                latest.insert(user.login, (avatar, "changes_requested"));
+                latest.insert(user.login.clone(), (avatar, "changes_requested"));
             }
             "DISMISSED" => {
-                latest.insert(user.login, (avatar, "dismissed"));
+                latest.insert(user.login.clone(), (avatar, "dismissed"));
             }
             "COMMENTED" => {
-                latest.entry(user.login).or_insert((avatar, "commented"));
+                latest
+                    .entry(user.login.clone())
+                    .or_insert((avatar, "commented"));
             }
             _ => {} // PENDING and anything else
         }
@@ -481,8 +572,6 @@ fn pr_to_item(pr: PrNode) -> WatchedItem {
         .next()
         .and_then(|c| c.commit.status_check_rollup)
         .map(|r| map_ci_state(&r.state));
-
-    let latest_comment = latest_comment_from(&pr.comments.nodes);
 
     WatchedItem {
         id: pr.database_id,
@@ -1423,6 +1512,160 @@ mod tests {
         let pr = make_pr(json!([]), json!([]));
         let item = pr_to_item(pr);
         assert!(item.latest_comment.is_none());
+    }
+
+    fn make_pr_with_all_comment_sources(
+        issue_comments: serde_json::Value,
+        reviews: serde_json::Value,
+        review_threads: serde_json::Value,
+    ) -> PrNode {
+        serde_json::from_value(json!({
+            "databaseId": 1,
+            "title": "t",
+            "number": 1,
+            "url": "https://github.com/o/r/pull/1",
+            "updatedAt": "2026-01-01T00:00:00Z",
+            "state": "OPEN",
+            "comments": { "totalCount": 0, "nodes": issue_comments },
+            "repository": { "nameWithOwner": "o/r" },
+            "author": { "login": "author", "avatarUrl": "a" },
+            "reviews": { "nodes": reviews },
+            "reviewThreads": { "nodes": review_threads },
+            "reviewRequests": { "nodes": [] },
+            "commits": { "nodes": [] }
+        }))
+        .expect("valid PrNode")
+    }
+
+    #[test]
+    fn pr_latest_comment_prefers_review_thread_when_newer_than_issue_comment() {
+        let pr = make_pr_with_all_comment_sources(
+            json!([
+                {
+                    "author": { "login": "alice", "avatarUrl": "a" },
+                    "bodyText": "old issue comment",
+                    "createdAt": "2026-04-27T12:20:31Z",
+                    "url": "u-issue"
+                }
+            ]),
+            json!([]),
+            json!([
+                {
+                    "comments": {
+                        "nodes": [
+                            {
+                                "author": { "login": "bob", "avatarUrl": "b" },
+                                "bodyText": "newer thread reply",
+                                "createdAt": "2026-04-27T22:11:38Z",
+                                "url": "u-thread"
+                            }
+                        ]
+                    }
+                }
+            ]),
+        );
+        let item = pr_to_item(pr);
+        let lc = item.latest_comment.expect("latest_comment present");
+        assert_eq!(lc.author, "bob");
+        assert_eq!(lc.body_text, "newer thread reply");
+        assert_eq!(lc.url, "u-thread");
+    }
+
+    #[test]
+    fn pr_latest_comment_prefers_review_body_over_older_issue_comment() {
+        let pr = make_pr_with_all_comment_sources(
+            json!([
+                {
+                    "author": { "login": "alice", "avatarUrl": "a" },
+                    "bodyText": "old issue comment",
+                    "createdAt": "2026-04-01T00:00:00Z",
+                    "url": "u-issue"
+                }
+            ]),
+            json!([
+                {
+                    "state": "COMMENTED",
+                    "author": { "login": "bob", "avatarUrl": "b" },
+                    "bodyText": "review with body",
+                    "createdAt": "2026-04-15T00:00:00Z",
+                    "url": "u-review"
+                }
+            ]),
+            json!([]),
+        );
+        let item = pr_to_item(pr);
+        let lc = item.latest_comment.expect("latest_comment present");
+        assert_eq!(lc.author, "bob");
+        assert_eq!(lc.body_text, "review with body");
+        assert_eq!(lc.url, "u-review");
+    }
+
+    #[test]
+    fn pr_latest_comment_skips_review_with_empty_body() {
+        let pr = make_pr_with_all_comment_sources(
+            json!([
+                {
+                    "author": { "login": "alice", "avatarUrl": "a" },
+                    "bodyText": "real comment",
+                    "createdAt": "2026-04-01T00:00:00Z",
+                    "url": "u-issue"
+                }
+            ]),
+            json!([
+                {
+                    "state": "APPROVED",
+                    "author": { "login": "bob", "avatarUrl": "b" },
+                    "bodyText": "",
+                    "createdAt": "2026-05-01T00:00:00Z",
+                    "url": "u-review"
+                }
+            ]),
+            json!([]),
+        );
+        let item = pr_to_item(pr);
+        let lc = item.latest_comment.expect("latest_comment present");
+        assert_eq!(lc.author, "alice");
+        assert_eq!(lc.body_text, "real comment");
+    }
+
+    #[test]
+    fn pr_latest_comment_picks_max_across_multiple_review_threads() {
+        // `reviewThreads(last: N)` is ordered by thread creation, not by
+        // latest activity, so the freshest comment can live in any thread.
+        let pr = make_pr_with_all_comment_sources(
+            json!([]),
+            json!([]),
+            json!([
+                {
+                    "comments": {
+                        "nodes": [
+                            {
+                                "author": { "login": "old", "avatarUrl": "a" },
+                                "bodyText": "older thread reply",
+                                "createdAt": "2026-04-27T22:02:31Z",
+                                "url": "u-old"
+                            }
+                        ]
+                    }
+                },
+                {
+                    "comments": {
+                        "nodes": [
+                            {
+                                "author": { "login": "new", "avatarUrl": "b" },
+                                "bodyText": "newer thread reply",
+                                "createdAt": "2026-04-27T22:11:38Z",
+                                "url": "u-new"
+                            }
+                        ]
+                    }
+                }
+            ]),
+        );
+        let item = pr_to_item(pr);
+        let lc = item.latest_comment.expect("latest_comment present");
+        assert_eq!(lc.author, "new");
+        assert_eq!(lc.url, "u-new");
     }
 
     #[test]
