@@ -286,20 +286,40 @@ fn build_comment_body(latest: &LatestComment, extra_count: u32) -> String {
     format!("{head}{excerpt}{suffix}")
 }
 
+/// Parse `describe_item_change`'s `+N comment(s)` reason into the comment
+/// count `N`. Returns `None` for any other reason (state changes, CI updates,
+/// "Updated", etc.). The two notification helpers below — "is this a comment
+/// event?" and "how many extras?" — are both views of this same parse.
+fn parse_plus_n_comments(reason: &str) -> Option<u32> {
+    let rest = reason.strip_prefix('+')?;
+    let mut parts = rest.split_whitespace();
+    let n = parts.next()?.parse::<u32>().ok()?;
+    matches!(parts.next(), Some("comment" | "comments")).then_some(n)
+}
+
 /// How many "extra" comments rolled into a single item-change update. We
 /// surface only the most recent one in the body and tag the rest as `(+N件)`
 /// so a burst doesn't spam multiple banners.
 fn extra_comment_count(reason: &str) -> u32 {
-    // `describe_item_change` emits "+N comment" / "+N comments". Anything else
-    // we treat as zero extras.
-    let Some(rest) = reason.strip_prefix('+') else {
-        return 0;
-    };
-    let head = rest.split_whitespace().next();
-    match head.and_then(|n| n.parse::<u32>().ok()) {
-        Some(n) if n >= 1 => n - 1,
-        _ => 0,
-    }
+    parse_plus_n_comments(reason)
+        .map(|n| n.saturating_sub(1))
+        .unwrap_or(0)
+}
+
+/// Whether an item-change reason describes a new-comment event. Only those
+/// should pull in `latest_comment` for the body — CI / state / push / draft
+/// / reviewer-state changes must keep showing the reason text so the user
+/// can tell what actually happened upstream.
+fn reason_is_comment_event(reason: &str) -> bool {
+    parse_plus_n_comments(reason).is_some()
+}
+
+/// GitHub /notifications `reason` strings that are comment-driven. These are
+/// the only fresh-thread reasons where the latest-comment body is the right
+/// content to surface. `review_requested`, `assign`, `state_change`,
+/// `ci_activity`, and `author` all fire on non-comment events.
+fn notif_reason_is_comment(reason: &str) -> bool {
+    matches!(reason, "comment" | "mention" | "team_mention")
 }
 
 async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
@@ -408,21 +428,37 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
             let Some(num) = n.number else { continue };
             let key = item_key(&n.repo, n.kind, num);
             let title = build_title(&n.repo, n.kind, num, &n.title);
-            let body = match items_by_key
-                .get(&key)
-                .and_then(|i| i.latest_comment.as_ref())
-            {
-                Some(c) => build_comment_body(c, 0),
-                None => reason_label(&n.reason).to_string(),
+            // Only comment-driven reasons should render the latest-comment
+            // body. CI / state / review-requested / assign reasons keep the
+            // short label so the user sees what actually changed.
+            let body = if notif_reason_is_comment(&n.reason) {
+                match items_by_key
+                    .get(&key)
+                    .and_then(|i| i.latest_comment.as_ref())
+                {
+                    Some(c) => build_comment_body(c, 0),
+                    None => reason_label(&n.reason).to_string(),
+                }
+            } else {
+                reason_label(&n.reason).to_string()
             };
             eprintln!("[eir] notify fresh: {} — {key}", n.reason);
             send_os_notification(app, &title, &body);
         }
         for ic in &item_changes {
             let title = build_title(&ic.item.repo, ic.item.kind, ic.item.number, &ic.item.title);
-            let body = match ic.item.latest_comment.as_ref() {
-                Some(c) => build_comment_body(c, extra_comment_count(&ic.reason)),
-                None => ic.reason.clone(),
+            // Only `+N comment(s)` reasons should render the latest-comment
+            // body. State transitions, CI changes, draft flips, reviewer
+            // state shifts, and the catch-all "Updated" all keep the reason
+            // text so a CI run or a force-push doesn't show up as someone's
+            // unrelated comment.
+            let body = if reason_is_comment_event(&ic.reason) {
+                match ic.item.latest_comment.as_ref() {
+                    Some(c) => build_comment_body(c, extra_comment_count(&ic.reason)),
+                    None => ic.reason.clone(),
+                }
+            } else {
+                ic.reason.clone()
             };
             eprintln!(
                 "[eir] notify item-change: {} — {}#{}",
@@ -943,6 +979,22 @@ mod notification_body_tests {
     }
 
     #[test]
+    fn parse_plus_n_comments_extracts_count() {
+        assert_eq!(parse_plus_n_comments("+1 comment"), Some(1));
+        assert_eq!(parse_plus_n_comments("+3 comments"), Some(3));
+        assert_eq!(parse_plus_n_comments("+10 comments"), Some(10));
+    }
+
+    #[test]
+    fn parse_plus_n_comments_rejects_non_matching_shapes() {
+        assert_eq!(parse_plus_n_comments("Now merged"), None);
+        assert_eq!(parse_plus_n_comments("+2 reviews"), None);
+        assert_eq!(parse_plus_n_comments("+abc nonsense"), None);
+        assert_eq!(parse_plus_n_comments("+1"), None);
+        assert_eq!(parse_plus_n_comments(""), None);
+    }
+
+    #[test]
     fn extra_comment_count_pulls_n_minus_one_from_plus_n_reasons() {
         assert_eq!(extra_comment_count("+1 comment"), 0);
         assert_eq!(extra_comment_count("+3 comments"), 2);
@@ -956,5 +1008,50 @@ mod notification_body_tests {
         assert_eq!(extra_comment_count("alice approved"), 0);
         assert_eq!(extra_comment_count("+abc nonsense"), 0);
         assert_eq!(extra_comment_count(""), 0);
+    }
+
+    #[test]
+    fn reason_is_comment_event_recognises_plus_n_comment_phrasing() {
+        assert!(reason_is_comment_event("+1 comment"));
+        assert!(reason_is_comment_event("+3 comments"));
+        assert!(reason_is_comment_event("+10 comments"));
+    }
+
+    #[test]
+    fn reason_is_comment_event_rejects_non_comment_changes() {
+        // These are exactly the reasons the user complained about: CI,
+        // state, review-state, draft flips, the catch-all "Updated", and
+        // "New in list" must NOT pull in the comment body.
+        assert!(!reason_is_comment_event("Now merged"));
+        assert!(!reason_is_comment_event("Now closed"));
+        assert!(!reason_is_comment_event("CI failure"));
+        assert!(!reason_is_comment_event("CI success"));
+        assert!(!reason_is_comment_event("Ready for review"));
+        assert!(!reason_is_comment_event("Marked as draft"));
+        assert!(!reason_is_comment_event("alice approved"));
+        assert!(!reason_is_comment_event("Updated"));
+        assert!(!reason_is_comment_event("New in list"));
+        assert!(!reason_is_comment_event(""));
+        // A "+N" prefix without the literal `comment(s)` token must not
+        // misfire — guards against future reasons like "+2 reviews".
+        assert!(!reason_is_comment_event("+2 reviews"));
+        assert!(!reason_is_comment_event("+1"));
+    }
+
+    #[test]
+    fn notif_reason_is_comment_only_matches_comment_driven_reasons() {
+        assert!(notif_reason_is_comment("comment"));
+        assert!(notif_reason_is_comment("mention"));
+        assert!(notif_reason_is_comment("team_mention"));
+    }
+
+    #[test]
+    fn notif_reason_is_comment_rejects_non_comment_reasons() {
+        assert!(!notif_reason_is_comment("ci_activity"));
+        assert!(!notif_reason_is_comment("state_change"));
+        assert!(!notif_reason_is_comment("review_requested"));
+        assert!(!notif_reason_is_comment("assign"));
+        assert!(!notif_reason_is_comment("author"));
+        assert!(!notif_reason_is_comment(""));
     }
 }
