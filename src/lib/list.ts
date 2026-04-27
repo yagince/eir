@@ -19,6 +19,26 @@ export function itemKey(i: {
   return `${i.repo}:${i.kind}:${i.number}`;
 }
 
+/// Flatten a comment body for one-line display in the list: drop fenced-code
+/// blocks (they explode height) and collapse any whitespace run — including
+/// embedded newlines — into a single space. Mirrors the Rust-side
+/// `flatten_comment_body` so the inline preview and the OS notification
+/// excerpt look the same.
+export function flattenCommentBody(body: string): string {
+  let inFence = false;
+  const kept: string[] = [];
+  for (const line of body.split("\n")) {
+    const trimmed = line.replace(/^\s+/, "");
+    if (trimmed.startsWith("```")) {
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    kept.push(line);
+  }
+  return kept.join(" ").split(/\s+/).filter(Boolean).join(" ");
+}
+
 export function filterVisible(
   items: WatchedItem[],
   opts: {

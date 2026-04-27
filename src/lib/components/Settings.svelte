@@ -18,6 +18,7 @@
     refreshMs: number;
     refreshOptions: { value: number; label: string }[];
     notifyEnabled: boolean;
+    showLatestComment: boolean;
     theme: Theme;
     themeOptions: { value: Theme; label: string }[];
     autostartEnabled: boolean | null;
@@ -38,6 +39,7 @@
     onBack: () => void;
     onIntervalChange: (value: number) => void;
     onNotifyChange: (enabled: boolean) => void;
+    onShowLatestCommentChange: (enabled: boolean) => void;
     onThemeChange: (value: Theme) => void;
     onToggleAutostart: (enabled: boolean) => void;
     onSendTestNotification: () => void;
@@ -56,6 +58,7 @@
     refreshMs,
     refreshOptions,
     notifyEnabled,
+    showLatestComment,
     theme,
     themeOptions,
     autostartEnabled,
@@ -76,6 +79,7 @@
     onBack,
     onIntervalChange,
     onNotifyChange,
+    onShowLatestCommentChange,
     onThemeChange,
     onToggleAutostart,
     onSendTestNotification,
@@ -156,6 +160,14 @@
         type="checkbox"
         checked={notifyEnabled}
         onchange={(e) => onNotifyChange(e.currentTarget.checked)}
+      />
+    </label>
+    <label class="setting-row">
+      <span class="setting-label">Show latest comment under unread items</span>
+      <input
+        type="checkbox"
+        checked={showLatestComment}
+        onchange={(e) => onShowLatestCommentChange(e.currentTarget.checked)}
       />
     </label>
     <label class="setting-row">

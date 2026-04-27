@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { itemKey, relativeTime } from "$lib/list";
+  import { flattenCommentBody, itemKey, relativeTime } from "$lib/list";
   import type {
     NotificationItem,
     RepoGroup,
@@ -21,6 +21,7 @@
     searchQuery: string;
     searchVisible: boolean;
     unreadOnly: boolean;
+    showLatestComment: boolean;
     onRefresh: () => void;
     onMarkAllVisibleAsRead: () => void;
     onShowSettings: () => void;
@@ -49,6 +50,7 @@
     searchQuery = $bindable(),
     searchVisible,
     unreadOnly,
+    showLatestComment,
     onRefresh,
     onMarkAllVisibleAsRead,
     onShowSettings,
@@ -316,6 +318,24 @@
                         </span>
                       {/each}
                     </span>
+                  {/if}
+                  {#if showLatestComment && notificationsByKey.has(itemKey(item)) && item.latest_comment}
+                    {@const flat = flattenCommentBody(
+                      item.latest_comment.body_text,
+                    )}
+                    {#if flat.length > 0}
+                      <span
+                        class="latest-comment"
+                        title={item.latest_comment.body_text}
+                      >
+                        <span class="latest-comment-clamp">
+                          <span class="latest-comment-author"
+                            >@{item.latest_comment.author}</span
+                          >
+                          {flat}
+                        </span>
+                      </span>
+                    {/if}
                   {/if}
                 </span>
               </button>
@@ -933,5 +953,47 @@
     text-overflow: ellipsis;
     white-space: nowrap;
     min-width: 0;
+  }
+
+  /* Quote-like preview of the latest unread comment. Only shown for items
+     that still have an active notification thread, so the noise scales with
+     the unread count rather than the entire list. Two lines are clamped via
+     `-webkit-line-clamp` so the line count is bounded but the body wraps
+     naturally instead of cutting mid-word. */
+  /* Outer chrome: padding/border/background only. Padding+overflow on the
+     same element as `-webkit-line-clamp` lets the third line bleed into the
+     padding-bottom region (overflow:hidden clips at the padding-box, not the
+     content-box), which is exactly the artefact users were seeing. */
+  .latest-comment {
+    display: block;
+    margin-top: 6px;
+    padding: 6px 8px 7px;
+    border-left: 2px solid rgba(120, 130, 150, 0.45);
+    background: rgba(120, 130, 150, 0.08);
+    border-radius: 0 4px 4px 0;
+    font-size: 0.78rem;
+    line-height: 1.55;
+    color: var(--muted, #aaa);
+    word-break: break-word;
+    overflow: hidden;
+  }
+
+  /* Inner clamp container: no padding, so its content-box and padding-box
+     coincide. `max-height = 3 line boxes` and `overflow: hidden` together
+     guarantee a hard 3-line cut even when the webkit clamp itself rounds
+     fractionally. */
+  .latest-comment-clamp {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    max-height: calc(1.55em * 3);
+  }
+
+  .latest-comment-author {
+    font-weight: 600;
+    margin-right: 4px;
+    opacity: 0.95;
   }
 </style>
