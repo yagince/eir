@@ -12,7 +12,7 @@ use crate::auth::{clear_stored_token, AppState};
 use crate::diff::{compute_item_changes, fresh_notifications, item_key, removed_items};
 use crate::github::{
     build_octocrab, fetch_item_states_with, fetch_notifications_with, fetch_watched_with, ItemRef,
-    NotificationItem, WatchedItem,
+    LatestComment, NotificationItem, WatchedItem,
 };
 
 pub const STATE_UPDATED_EVENT: &str = "state-updated";
@@ -203,6 +203,105 @@ fn send_os_notification(app: &AppHandle, title: &str, body: &str) {
     }
 }
 
+/// Truncate a string to at most `max` Unicode scalars, appending an ellipsis
+/// when shortened. The ellipsis counts toward the budget so callers can sum
+/// pieces (`prefix` + truncated body + `suffix`) and stay inside a known cap.
+fn truncate_chars(s: &str, max: usize) -> String {
+    let len = s.chars().count();
+    if len <= max {
+        return s.to_string();
+    }
+    if max == 0 {
+        return String::new();
+    }
+    // Reserve one slot for the ellipsis so the returned string fits in `max`.
+    let take = max - 1;
+    let truncated: String = s.chars().take(take).collect();
+    format!("{truncated}…")
+}
+
+/// Flatten a comment body for one-line display: drop fenced-code lines, then
+/// collapse all whitespace runs (including embedded newlines) into single
+/// spaces. Without this, multi-paragraph comments would push the notification
+/// well past its visible budget.
+pub(crate) fn flatten_comment_body(body: &str) -> String {
+    let mut in_fence = false;
+    let mut kept: Vec<&str> = Vec::new();
+    for line in body.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        kept.push(line);
+    }
+    kept.join(" ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+const NOTIF_TITLE_BUDGET: usize = 60;
+const NOTIF_BODY_BUDGET: usize = 140;
+
+fn build_title(repo: &str, kind: &str, number: u64, item_title: &str) -> String {
+    let prefix = match kind {
+        "pr" => format!("{repo}#{number}"),
+        "issue" => format!("{repo}#{number}"),
+        _ => format!("{repo}#{number}"),
+    };
+    if item_title.is_empty() {
+        return prefix;
+    }
+    let head = format!("{prefix}: ");
+    let remaining = NOTIF_TITLE_BUDGET.saturating_sub(head.chars().count());
+    if remaining == 0 {
+        return prefix;
+    }
+    format!("{head}{}", truncate_chars(item_title, remaining))
+}
+
+/// Build the body line. When a `LatestComment` is supplied the body is
+/// `@author: <flattened excerpt>`, optionally annotated with `(+N件)` for
+/// burst comment additions. Otherwise we fall back to the short reason.
+fn build_comment_body(latest: &LatestComment, extra_count: u32) -> String {
+    let flat = flatten_comment_body(&latest.body_text);
+    let suffix = if extra_count > 0 {
+        format!(" (+{extra_count}件)")
+    } else {
+        String::new()
+    };
+    let head = format!("@{}: ", latest.author);
+    let body_budget = NOTIF_BODY_BUDGET
+        .saturating_sub(head.chars().count())
+        .saturating_sub(suffix.chars().count());
+    let excerpt = if body_budget == 0 {
+        String::new()
+    } else {
+        truncate_chars(&flat, body_budget)
+    };
+    format!("{head}{excerpt}{suffix}")
+}
+
+/// How many "extra" comments rolled into a single item-change update. We
+/// surface only the most recent one in the body and tag the rest as `(+N件)`
+/// so a burst doesn't spam multiple banners.
+fn extra_comment_count(reason: &str) -> u32 {
+    // `describe_item_change` emits "+N comment" / "+N comments". Anything else
+    // we treat as zero extras.
+    let Some(rest) = reason.strip_prefix('+') else {
+        return 0;
+    };
+    let head = rest.split_whitespace().next();
+    match head.and_then(|n| n.parse::<u32>().ok()) {
+        Some(n) if n >= 1 => n - 1,
+        _ => 0,
+    }
+}
+
 async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
     // Pull the current token off AppState. No token = sign-in required, and
     // we clear cached state without emitting the "loading" prelude because
@@ -295,24 +394,41 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
     let item_changes = compute_item_changes(&prev_items, &items, &notified_keys);
     let removed = removed_items(&prev_items, &items, &notified_keys);
 
+    // Index the freshly-fetched watched items by item_key so the fresh-thread
+    // path (which only carries subject metadata) can pick up the matching
+    // `latest_comment`. Items present in the search result but absent from the
+    // notifications inbox are still useful here for the item-change path.
+    let items_by_key: HashMap<String, &WatchedItem> = items
+        .iter()
+        .map(|i| (item_key(&i.repo, i.kind, i.number), i))
+        .collect();
+
     if has_loaded_once && notify_enabled {
         for n in &fresh {
-            let suffix = match n.number {
-                Some(num) => format!("{}#{}", n.repo, num),
-                None => n.repo.clone(),
+            let Some(num) = n.number else { continue };
+            let key = item_key(&n.repo, n.kind, num);
+            let title = build_title(&n.repo, n.kind, num, &n.title);
+            let body = match items_by_key
+                .get(&key)
+                .and_then(|i| i.latest_comment.as_ref())
+            {
+                Some(c) => build_comment_body(c, 0),
+                None => reason_label(&n.reason).to_string(),
             };
-            let title = reason_label(&n.reason);
-            let body = format!("{suffix} — {}", n.title);
-            eprintln!("[eir] notify fresh: {title} — {suffix}");
-            send_os_notification(app, title, &body);
+            eprintln!("[eir] notify fresh: {} — {key}", n.reason);
+            send_os_notification(app, &title, &body);
         }
         for ic in &item_changes {
-            let body = format!("{}#{} — {}", ic.item.repo, ic.item.number, ic.item.title);
+            let title = build_title(&ic.item.repo, ic.item.kind, ic.item.number, &ic.item.title);
+            let body = match ic.item.latest_comment.as_ref() {
+                Some(c) => build_comment_body(c, extra_comment_count(&ic.reason)),
+                None => ic.reason.clone(),
+            };
             eprintln!(
                 "[eir] notify item-change: {} — {}#{}",
                 ic.reason, ic.item.repo, ic.item.number
             );
-            send_os_notification(app, &ic.reason, &body);
+            send_os_notification(app, &title, &body);
         }
         if !removed.is_empty() {
             let refs: Vec<ItemRef> = removed
@@ -694,5 +810,151 @@ mod drive_progressive_fetches_tests {
         let ((items_res, notifs_res), _) = joined;
         assert_eq!(items_res.unwrap(), vec![9]);
         assert_eq!(notifs_res.unwrap(), vec!["hi"]);
+    }
+}
+
+#[cfg(test)]
+mod notification_body_tests {
+    use super::*;
+
+    fn make_comment(author: &str, body: &str) -> LatestComment {
+        LatestComment {
+            author: author.into(),
+            author_avatar: "".into(),
+            body_text: body.into(),
+            created_at: "2026-04-27T00:00:00Z".into(),
+            url: "https://example.com/c/1".into(),
+        }
+    }
+
+    #[test]
+    fn truncate_chars_passes_through_short_strings() {
+        assert_eq!(truncate_chars("hello", 10), "hello");
+        assert_eq!(truncate_chars("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_chars_appends_ellipsis_on_overflow() {
+        // The ellipsis counts toward the max so the result fits in 5 chars.
+        assert_eq!(truncate_chars("abcdefgh", 5), "abcd…");
+    }
+
+    #[test]
+    fn truncate_chars_counts_unicode_scalars_not_bytes() {
+        // Each kana is 3 bytes in UTF-8; truncating by chars must not split a
+        // codepoint mid-byte and corrupt the output.
+        let s = "あいうえおかきく";
+        assert_eq!(truncate_chars(s, 4), "あいう…");
+        assert_eq!(truncate_chars(s, 8), "あいうえおかきく");
+    }
+
+    #[test]
+    fn truncate_chars_zero_max_returns_empty() {
+        assert_eq!(truncate_chars("hello", 0), "");
+    }
+
+    #[test]
+    fn flatten_comment_body_collapses_whitespace_and_newlines() {
+        let raw = "first line\n\nsecond   line\n\tthird";
+        assert_eq!(flatten_comment_body(raw), "first line second line third");
+    }
+
+    #[test]
+    fn flatten_comment_body_strips_fenced_code_blocks() {
+        let raw = "before\n```rust\nfn main() {}\n```\nafter";
+        assert_eq!(flatten_comment_body(raw), "before after");
+    }
+
+    #[test]
+    fn flatten_comment_body_handles_unclosed_fence() {
+        // An unclosed fence still suppresses lines after the opener so the
+        // banner doesn't dump a half-rendered code block on the user.
+        let raw = "before\n```\nfn main() {}";
+        assert_eq!(flatten_comment_body(raw), "before");
+    }
+
+    #[test]
+    fn build_title_combines_repo_number_and_truncated_title() {
+        let title = build_title("owner/repo", "pr", 123, "PR title goes here");
+        assert_eq!(title, "owner/repo#123: PR title goes here");
+    }
+
+    #[test]
+    fn build_title_truncates_long_titles_to_fit_budget() {
+        let long = "a".repeat(200);
+        let title = build_title("o/r", "pr", 1, &long);
+        // Total length stays inside NOTIF_TITLE_BUDGET (60 chars). The
+        // "o/r#1: " prefix consumes 7 chars, leaving 53 for the truncated
+        // title (including its ellipsis).
+        assert!(title.starts_with("o/r#1: "));
+        let after_prefix = title.trim_start_matches("o/r#1: ");
+        assert!(
+            after_prefix.ends_with('…'),
+            "expected ellipsis suffix in {title}"
+        );
+        assert!(title.chars().count() <= NOTIF_TITLE_BUDGET);
+        assert_eq!(after_prefix.chars().count(), 53);
+    }
+
+    #[test]
+    fn build_title_falls_back_when_title_is_empty() {
+        assert_eq!(build_title("o/r", "pr", 5, ""), "o/r#5");
+    }
+
+    #[test]
+    fn build_comment_body_renders_author_and_excerpt() {
+        let c = make_comment("alice", "looks good to me");
+        assert_eq!(build_comment_body(&c, 0), "@alice: looks good to me");
+    }
+
+    #[test]
+    fn build_comment_body_appends_extra_count_suffix() {
+        let c = make_comment("alice", "first comment");
+        assert_eq!(build_comment_body(&c, 2), "@alice: first comment (+2件)");
+    }
+
+    #[test]
+    fn build_comment_body_truncates_long_excerpts_within_budget() {
+        let long = "x".repeat(500);
+        let c = make_comment("alice", &long);
+        let body = build_comment_body(&c, 0);
+        // "@alice: " is 8 chars; the excerpt fills the remaining 132 chars
+        // including its ellipsis, keeping the whole body inside the budget.
+        assert!(body.starts_with("@alice: "));
+        assert!(body.ends_with('…'));
+        assert!(body.chars().count() <= NOTIF_BODY_BUDGET);
+        assert_eq!(body.chars().count(), 8 + 132);
+    }
+
+    #[test]
+    fn build_comment_body_keeps_excerpt_when_suffix_is_present() {
+        // The trailing `(+N件)` must not push the excerpt past the budget.
+        let long = "x".repeat(500);
+        let c = make_comment("a", &long);
+        let body = build_comment_body(&c, 9);
+        assert!(body.ends_with(" (+9件)"));
+        assert!(body.chars().count() <= NOTIF_BODY_BUDGET);
+    }
+
+    #[test]
+    fn build_comment_body_normalizes_multiline_input() {
+        let c = make_comment("bob", "line1\n\nline2\n```\ncode\n```\nline3");
+        assert_eq!(build_comment_body(&c, 0), "@bob: line1 line2 line3");
+    }
+
+    #[test]
+    fn extra_comment_count_pulls_n_minus_one_from_plus_n_reasons() {
+        assert_eq!(extra_comment_count("+1 comment"), 0);
+        assert_eq!(extra_comment_count("+3 comments"), 2);
+        assert_eq!(extra_comment_count("+10 comments"), 9);
+    }
+
+    #[test]
+    fn extra_comment_count_returns_zero_for_unrelated_reasons() {
+        assert_eq!(extra_comment_count("Now merged"), 0);
+        assert_eq!(extra_comment_count("Updated"), 0);
+        assert_eq!(extra_comment_count("alice approved"), 0);
+        assert_eq!(extra_comment_count("+abc nonsense"), 0);
+        assert_eq!(extra_comment_count(""), 0);
     }
 }

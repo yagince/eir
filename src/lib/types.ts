@@ -14,6 +14,14 @@ export type Commenter = {
   avatar_url: string;
 };
 
+export type LatestComment = {
+  author: string;
+  author_avatar: string;
+  body_text: string;
+  created_at: string;
+  url: string;
+};
+
 export type CiStatus = "success" | "pending" | "failure" | "error" | "unknown";
 
 export type WatchedItem = {
@@ -32,6 +40,7 @@ export type WatchedItem = {
   reviewers: Reviewer[];
   commenters: Commenter[];
   ci_status: CiStatus | null;
+  latest_comment: LatestComment | null;
 };
 
 export type NotificationItem = {

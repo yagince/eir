@@ -3,6 +3,7 @@ import type { WatchedItem } from "./types";
 import {
   filterBySearch,
   filterVisible,
+  flattenCommentBody,
   groupByRepo,
   itemKey,
   relativeTime,
@@ -25,6 +26,7 @@ function makeItem(
     reviewers: [],
     commenters: [],
     ci_status: null,
+    latest_comment: null,
     ...overrides,
   };
 }
@@ -270,5 +272,29 @@ describe("filterBySearch", () => {
   it("returns empty array when no item matches all tokens", () => {
     const out = filterBySearch(items, "acme nothingmatches");
     expect(out).toEqual([]);
+  });
+});
+
+describe("flattenCommentBody", () => {
+  it("collapses runs of whitespace and embedded newlines", () => {
+    expect(flattenCommentBody("first line\n\nsecond   line\n\tthird")).toBe(
+      "first line second line third",
+    );
+  });
+
+  it("strips fenced code blocks", () => {
+    expect(flattenCommentBody("before\n```ts\ncode()\n```\nafter")).toBe(
+      "before after",
+    );
+  });
+
+  it("suppresses content after an unclosed fence", () => {
+    // Mirrors the Rust side: an unclosed fence still hides everything after
+    // it so a half-rendered code block doesn't leak into the preview.
+    expect(flattenCommentBody("before\n```\ncode")).toBe("before");
+  });
+
+  it("returns an empty string for whitespace-only input", () => {
+    expect(flattenCommentBody("   \n\t  ")).toBe("");
   });
 });

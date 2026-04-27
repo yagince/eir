@@ -72,6 +72,16 @@ pub struct Commenter {
 }
 
 #[derive(Serialize, Clone)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
+pub struct LatestComment {
+    pub author: String,
+    pub author_avatar: String,
+    pub body_text: String,
+    pub created_at: String,
+    pub url: String,
+}
+
+#[derive(Serialize, Clone)]
 pub struct WatchedItem {
     pub id: u64,
     pub kind: &'static str,
@@ -88,6 +98,7 @@ pub struct WatchedItem {
     pub reviewers: Vec<Reviewer>,
     pub commenters: Vec<Commenter>,
     pub ci_status: Option<&'static str>, // "success" | "pending" | "failure" | "error"
+    pub latest_comment: Option<LatestComment>,
 }
 
 fn queries_for_tab(tab: &str, watched_orgs: &[String]) -> Vec<String> {
@@ -134,7 +145,19 @@ fragment PrFields on PullRequest {
   updatedAt
   state
   isDraft
-  comments { totalCount }
+  comments(last: 1) {
+    totalCount
+    nodes {
+      author {
+        login
+        ... on User { avatarUrl }
+        ... on Bot { avatarUrl }
+      }
+      bodyText
+      createdAt
+      url
+    }
+  }
   repository { nameWithOwner }
   author {
     login
@@ -183,6 +206,9 @@ fragment IssueFields on Issue {
         ... on User { avatarUrl }
         ... on Bot { avatarUrl }
       }
+      bodyText
+      createdAt
+      url
     }
   }
   repository { nameWithOwner }
@@ -247,7 +273,7 @@ struct PrNode {
     state: String,
     #[serde(default)]
     is_draft: bool,
-    comments: CountNode,
+    comments: IssueCommentsNode,
     repository: RepoNode,
     author: Option<AuthorNode>,
     reviews: NodeList<ReviewNode>,
@@ -271,12 +297,6 @@ struct IssueNode {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct CountNode {
-    total_count: u32,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct IssueCommentsNode {
     total_count: u32,
     #[serde(default)]
@@ -284,8 +304,15 @@ struct IssueCommentsNode {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct IssueCommentNode {
     author: Option<AuthorNode>,
+    #[serde(default)]
+    body_text: String,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    url: String,
 }
 
 #[derive(Deserialize)]
@@ -340,6 +367,27 @@ struct CommitNode {
 #[derive(Deserialize)]
 struct StatusCheckRollup {
     state: String,
+}
+
+/// Pick the most recent comment with a real author from a `comments(last: N)`
+/// slice. GraphQL returns the slice oldest→newest, so the back of the vec is
+/// the newest. Anonymous (deleted-user) comments are skipped — there's no
+/// useful "@author" to display.
+fn latest_comment_from(nodes: &[Option<IssueCommentNode>]) -> Option<LatestComment> {
+    for slot in nodes.iter().rev() {
+        let Some(node) = slot else { continue };
+        let Some(author) = node.author.as_ref() else {
+            continue;
+        };
+        return Some(LatestComment {
+            author: author.login.clone(),
+            author_avatar: author.avatar_url.clone().unwrap_or_default(),
+            body_text: node.body_text.clone(),
+            created_at: node.created_at.clone(),
+            url: node.url.clone(),
+        });
+    }
+    None
 }
 
 fn map_item_state(raw: &str) -> &'static str {
@@ -434,6 +482,8 @@ fn pr_to_item(pr: PrNode) -> WatchedItem {
         .and_then(|c| c.commit.status_check_rollup)
         .map(|r| map_ci_state(&r.state));
 
+    let latest_comment = latest_comment_from(&pr.comments.nodes);
+
     WatchedItem {
         id: pr.database_id,
         kind: "pr",
@@ -450,6 +500,7 @@ fn pr_to_item(pr: PrNode) -> WatchedItem {
         reviewers,
         commenters: Vec::new(),
         ci_status,
+        latest_comment,
     }
 }
 
@@ -470,6 +521,8 @@ fn issue_to_item(issue: IssueNode) -> WatchedItem {
     // in the list too — they often drive the discussion and showing only
     // "others" would hide that. The frontend can decide whether to draw
     // the author chip differently.
+    let latest_comment = latest_comment_from(&issue.comments.nodes);
+
     let mut seen_logins: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut commenters: Vec<Commenter> = Vec::new();
     for c in issue.comments.nodes.into_iter().flatten() {
@@ -499,6 +552,7 @@ fn issue_to_item(issue: IssueNode) -> WatchedItem {
         reviewers: Vec::new(),
         commenters,
         ci_status: None,
+        latest_comment,
     }
 }
 
@@ -1278,6 +1332,97 @@ mod tests {
         // Legacy/older backend shape without `nodes` must still deserialize.
         let item = issue_to_item(make_issue_node(10, "o/r", 7));
         assert!(item.commenters.is_empty());
+    }
+
+    #[test]
+    fn issue_latest_comment_picks_most_recent_node() {
+        // GraphQL returns the slice oldest→newest, so the LAST element is the
+        // newest. issue_to_item must surface that one as `latest_comment`.
+        let item = issue_to_item(make_issue_node_with_comments(json!([
+            {
+                "author": { "login": "alice", "avatarUrl": "a-url" },
+                "bodyText": "first",
+                "createdAt": "2026-01-01T00:00:00Z",
+                "url": "https://github.com/o/r/issues/1#c1"
+            },
+            {
+                "author": { "login": "bob", "avatarUrl": "b-url" },
+                "bodyText": "second is newest",
+                "createdAt": "2026-02-01T00:00:00Z",
+                "url": "https://github.com/o/r/issues/1#c2"
+            }
+        ])));
+        let lc = item.latest_comment.expect("latest_comment present");
+        assert_eq!(lc.author, "bob");
+        assert_eq!(lc.author_avatar, "b-url");
+        assert_eq!(lc.body_text, "second is newest");
+        assert_eq!(lc.created_at, "2026-02-01T00:00:00Z");
+        assert_eq!(lc.url, "https://github.com/o/r/issues/1#c2");
+    }
+
+    #[test]
+    fn issue_latest_comment_skips_anonymous_authors_walking_backwards() {
+        // The newest comment was made by a deleted user; we still want a
+        // useful "@author:" line, so fall back to the second-newest.
+        let item = issue_to_item(make_issue_node_with_comments(json!([
+            {
+                "author": { "login": "alice", "avatarUrl": "a" },
+                "bodyText": "kept",
+                "createdAt": "2026-01-01T00:00:00Z",
+                "url": "u1"
+            },
+            { "author": null, "bodyText": "ghost", "createdAt": "2026-02-01T00:00:00Z", "url": "u2" }
+        ])));
+        let lc = item.latest_comment.expect("falls back to second-newest");
+        assert_eq!(lc.author, "alice");
+        assert_eq!(lc.body_text, "kept");
+    }
+
+    #[test]
+    fn issue_latest_comment_is_none_when_no_comments() {
+        let item = issue_to_item(make_issue_node(10, "o/r", 7));
+        assert!(item.latest_comment.is_none());
+    }
+
+    #[test]
+    fn pr_latest_comment_uses_last_node() {
+        let pr: PrNode = serde_json::from_value(json!({
+            "databaseId": 1,
+            "title": "t",
+            "number": 1,
+            "url": "https://github.com/o/r/pull/1",
+            "updatedAt": "2026-01-01T00:00:00Z",
+            "state": "OPEN",
+            "comments": {
+                "totalCount": 1,
+                "nodes": [
+                    {
+                        "author": { "login": "carol", "avatarUrl": "c" },
+                        "bodyText": "looks good",
+                        "createdAt": "2026-04-01T00:00:00Z",
+                        "url": "https://github.com/o/r/pull/1#c1"
+                    }
+                ]
+            },
+            "repository": { "nameWithOwner": "o/r" },
+            "author": { "login": "author", "avatarUrl": "a" },
+            "reviews": { "nodes": [] },
+            "reviewRequests": { "nodes": [] },
+            "commits": { "nodes": [] }
+        }))
+        .unwrap();
+        let item = pr_to_item(pr);
+        let lc = item.latest_comment.expect("latest_comment present");
+        assert_eq!(lc.author, "carol");
+        assert_eq!(lc.body_text, "looks good");
+        assert_eq!(lc.url, "https://github.com/o/r/pull/1#c1");
+    }
+
+    #[test]
+    fn pr_latest_comment_is_none_when_no_nodes() {
+        let pr = make_pr(json!([]), json!([]));
+        let item = pr_to_item(pr);
+        assert!(item.latest_comment.is_none());
     }
 
     #[test]

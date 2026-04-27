@@ -171,6 +171,7 @@ mod tests {
             reviewers: Vec::new(),
             commenters: Vec::new(),
             ci_status: None,
+            latest_comment: None,
         }
     }
 
