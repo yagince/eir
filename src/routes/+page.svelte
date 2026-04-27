@@ -30,6 +30,7 @@
     loadInterval,
     loadNotify,
     loadPinnedItems,
+    loadShowLatestComment,
     loadTab,
     loadTheme,
     loadUnreadOnly,
@@ -39,6 +40,7 @@
     persistInterval,
     persistNotify,
     persistPinnedItems,
+    persistShowLatestComment,
     persistTab,
     persistTheme,
     persistUnreadOnly,
@@ -90,6 +92,7 @@
   let showingSettings = $state(false);
   let refreshMs = $state<number>(loadInterval());
   let notifyEnabled = $state<boolean>(loadNotify());
+  let showLatestComment = $state<boolean>(loadShowLatestComment());
   let theme = $state<Theme>(loadTheme());
   let systemDark = $state<boolean>(
     window.matchMedia("(prefers-color-scheme: dark)").matches,
@@ -685,6 +688,11 @@
     void pushBackgroundConfig({ notifyEnabled: enabled });
   }
 
+  function onShowLatestCommentChange(enabled: boolean) {
+    showLatestComment = enabled;
+    persistShowLatestComment(enabled);
+  }
+
   function hideItem(id: number) {
     hiddenItems.add(id);
     persistHiddenItems(hiddenItems);
@@ -760,6 +768,7 @@
     version: number;
     refreshMs?: number;
     notifyEnabled?: boolean;
+    showLatestComment?: boolean;
     theme?: Theme;
     excludedRepos?: string[];
     watchedOrgs?: string[];
@@ -773,6 +782,7 @@
       version: SETTINGS_EXPORT_VERSION,
       refreshMs,
       notifyEnabled,
+      showLatestComment,
       theme,
       excludedRepos: [...excludedRepos].sort(),
       watchedOrgs: [...watchedOrgs].sort(),
@@ -848,6 +858,11 @@
     if (typeof data.notifyEnabled === "boolean") {
       onNotifyChange(data.notifyEnabled);
       applied.push("notifications");
+    }
+
+    if (typeof data.showLatestComment === "boolean") {
+      onShowLatestCommentChange(data.showLatestComment);
+      applied.push("latest comment preview");
     }
 
     if (
@@ -1040,6 +1055,7 @@
       {refreshMs}
       refreshOptions={REFRESH_OPTIONS}
       {notifyEnabled}
+      {showLatestComment}
       {theme}
       themeOptions={THEME_OPTIONS}
       {autostartEnabled}
@@ -1060,6 +1076,7 @@
       onBack={() => (showingSettings = false)}
       {onIntervalChange}
       {onNotifyChange}
+      {onShowLatestCommentChange}
       {onThemeChange}
       onToggleAutostart={toggleAutostart}
       onSendTestNotification={sendTestNotification}
@@ -1121,6 +1138,7 @@
       {error}
       {searchVisible}
       {unreadOnly}
+      {showLatestComment}
       bind:searchQuery
       onRefresh={triggerRefresh}
       onMarkAllVisibleAsRead={markAllVisibleAsRead}

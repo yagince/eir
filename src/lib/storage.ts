@@ -9,6 +9,7 @@ export const PINNED_ITEMS_KEY = "eir.pinnedItems";
 export const WATCHED_ORGS_KEY = "eir.watchedOrgs";
 export const THEME_KEY = "eir.theme";
 export const UNREAD_ONLY_KEY = "eir.unreadOnly";
+export const SHOW_LATEST_COMMENT_KEY = "eir.showLatestComment";
 
 export const DEFAULT_REFRESH_MS = 60_000;
 
@@ -117,4 +118,12 @@ export function loadUnreadOnly(): boolean {
 
 export function persistUnreadOnly(enabled: boolean): void {
   localStorage.setItem(UNREAD_ONLY_KEY, enabled ? "1" : "0");
+}
+
+export function loadShowLatestComment(): boolean {
+  return localStorage.getItem(SHOW_LATEST_COMMENT_KEY) !== "0";
+}
+
+export function persistShowLatestComment(enabled: boolean): void {
+  localStorage.setItem(SHOW_LATEST_COMMENT_KEY, enabled ? "1" : "0");
 }

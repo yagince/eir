@@ -21,6 +21,7 @@
     searchQuery: string;
     searchVisible: boolean;
     unreadOnly: boolean;
+    showLatestComment: boolean;
     onRefresh: () => void;
     onMarkAllVisibleAsRead: () => void;
     onShowSettings: () => void;
@@ -49,6 +50,7 @@
     searchQuery = $bindable(),
     searchVisible,
     unreadOnly,
+    showLatestComment,
     onRefresh,
     onMarkAllVisibleAsRead,
     onShowSettings,
@@ -317,7 +319,7 @@
                       {/each}
                     </span>
                   {/if}
-                  {#if notificationsByKey.has(itemKey(item)) && item.latest_comment}
+                  {#if showLatestComment && notificationsByKey.has(itemKey(item)) && item.latest_comment}
                     {@const flat = flattenCommentBody(
                       item.latest_comment.body_text,
                     )}
