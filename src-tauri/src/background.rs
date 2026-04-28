@@ -65,6 +65,14 @@ pub struct BackgroundState {
     pub prev_items: HashMap<u64, WatchedItem>,
     pub prev_thread_updated_at: HashMap<u64, String>,
 
+    /// Bumped whenever the item-set query parameters (tab / watched_orgs)
+    /// change. A cycle captures this at start and re-checks at write-back:
+    /// if it has advanced, the cycle's results were fetched against the old
+    /// config and must not overwrite the freshly-cleared diff anchors —
+    /// otherwise the next cycle would diff the new tab against the old tab's
+    /// items and fire spurious "Closed" / "New in list" notifications.
+    pub config_generation: u64,
+
     pub tab: Tab,
     pub watched_orgs: Vec<String>,
     pub excluded_repos: HashSet<String>,
@@ -84,6 +92,9 @@ impl BackgroundState {
 
     /// Drop cached items + diff anchors and mark the session unauthenticated.
     /// Used on sign-out, 401 responses, and the no-token branch of the worker.
+    /// Bumps `config_generation` so any in-flight cycle's write-back is
+    /// rejected as stale and can't resurrect items/authenticated=true after
+    /// the user signed out.
     fn reset_session(&mut self, last_error: Option<String>) {
         self.items.clear();
         self.notifications.clear();
@@ -93,6 +104,7 @@ impl BackgroundState {
         self.last_error = last_error;
         self.authenticated = false;
         self.loading = false;
+        self.config_generation = self.config_generation.wrapping_add(1);
     }
 }
 
@@ -341,8 +353,10 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
     // Take diff anchors under the lock (move, not clone — they're about to
     // be overwritten anyway) along with the config snapshot. Drop the lock
     // before any await so the state stays contended-free while fetching.
-    let (tab, watched_orgs, has_loaded_once, prev_items, prev_threads, notify_enabled) = handle
-        .with_state(|s| {
+    // `generation` lets the write-back detect a tab/orgs change that landed
+    // mid-cycle and discard stale anchors.
+    let (tab, watched_orgs, has_loaded_once, prev_items, prev_threads, notify_enabled, generation) =
+        handle.with_state(|s| {
             s.loading = true;
             (
                 s.tab,
@@ -351,6 +365,7 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
                 std::mem::take(&mut s.prev_items),
                 std::mem::take(&mut s.prev_thread_updated_at),
                 s.notify_enabled,
+                s.config_generation,
             )
         });
     emit_state(app, handle);
@@ -371,16 +386,34 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
     // returns — the list is what the user stares at, so pushing it as soon as
     // it arrives lets the popup refresh before notifications finish loading.
     // The tray badge and diff-driven OS notifications still wait for both.
+    // The partial-emit callbacks skip the write when `config_generation`
+    // has advanced so old-tab items don't briefly flash into the new-tab UI.
     let (items_res, notifs_res) = drive_progressive_fetches(
         fetch_watched_with(&octo, tab.as_query_key(), &watched_orgs),
         fetch_notifications_with(&octo),
         |items| {
-            handle.with_state(|s| s.items = items.clone());
-            emit_state(app, handle);
+            let applied = handle.with_state(|s| {
+                if s.config_generation != generation {
+                    return false;
+                }
+                s.items = items.clone();
+                true
+            });
+            if applied {
+                emit_state(app, handle);
+            }
         },
         |notifs| {
-            handle.with_state(|s| s.notifications = notifs.clone());
-            emit_state(app, handle);
+            let applied = handle.with_state(|s| {
+                if s.config_generation != generation {
+                    return false;
+                }
+                s.notifications = notifs.clone();
+                true
+            });
+            if applied {
+                emit_state(app, handle);
+            }
         },
     )
     .await;
@@ -405,6 +438,19 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
         Ok(v) => v,
         Err(err) => return fail_cycle(app, handle, err.message),
     };
+
+    // If the tab / watched_orgs changed while this cycle was in flight, the
+    // diff anchors and the freshly-fetched items belong to two different
+    // configs. Skip notifications and write-back entirely so the next cycle
+    // (already triggered by `set_background_config`) can rebuild anchors
+    // against the new config without firing spurious "Closed" / "New in
+    // list" banners for items that simply fell outside the new filter.
+    let stale = handle.with_state(|s| s.config_generation != generation);
+    if stale {
+        handle.with_state(|s| s.loading = false);
+        emit_state(app, handle);
+        return;
+    }
 
     let fresh = fresh_notifications(&prev_threads, &notifs);
     let notified_keys: HashSet<String> = fresh
@@ -630,64 +676,73 @@ pub struct BackgroundConfig {
     pub interval_ms: Option<u64>,
 }
 
+/// Apply a config patch to the background state. Pulled out of the Tauri
+/// command so the state mutation (and especially the diff-anchor reset on
+/// tab/orgs changes) can be unit-tested without a Tauri runtime.
+///
+/// Returns `(trigger, badge_dirty)` — `trigger` means the worker must
+/// re-fetch (tab / watched_orgs changed, or this is the first apply that
+/// unparks the worker); `badge_dirty` means a frontend-side filter changed
+/// and the tray badge needs a refresh.
+fn apply_background_config(s: &mut BackgroundState, config: BackgroundConfig) -> (bool, bool) {
+    // First push from the frontend always wakes the worker — the
+    // main loop is parked on `config_applied` and the tab/orgs may
+    // happen to equal the defaults, which would leave `trigger`
+    // false and strand the worker forever.
+    let first_apply = !s.config_applied;
+    s.config_applied = true;
+    let mut trigger = first_apply;
+    let mut badge_dirty = false;
+    if let Some(tab) = config.tab {
+        if tab != s.tab {
+            s.tab = tab;
+            s.has_loaded_once = false;
+            s.prev_items.clear();
+            s.prev_thread_updated_at.clear();
+            s.config_generation = s.config_generation.wrapping_add(1);
+            trigger = true;
+        }
+    }
+    if let Some(orgs) = config.watched_orgs {
+        if orgs != s.watched_orgs {
+            s.watched_orgs = orgs;
+            s.has_loaded_once = false;
+            s.prev_items.clear();
+            s.prev_thread_updated_at.clear();
+            s.config_generation = s.config_generation.wrapping_add(1);
+            trigger = true;
+        }
+    }
+    if let Some(excluded) = config.excluded_repos {
+        let next: HashSet<String> = excluded.into_iter().collect();
+        if next != s.excluded_repos {
+            s.excluded_repos = next;
+            badge_dirty = true;
+        }
+    }
+    if let Some(hidden) = config.hidden_items {
+        let next: HashSet<u64> = hidden.into_iter().collect();
+        if next != s.hidden_items {
+            s.hidden_items = next;
+            badge_dirty = true;
+        }
+    }
+    if let Some(notify) = config.notify_enabled {
+        s.notify_enabled = notify;
+    }
+    if let Some(ms) = config.interval_ms {
+        s.interval_ms = ms.max(MIN_INTERVAL_MS);
+    }
+    (trigger, badge_dirty)
+}
+
 #[tauri::command]
 pub fn set_background_config(
     config: BackgroundConfig,
     handle: tauri::State<'_, BackgroundHandle>,
     app: AppHandle,
 ) {
-    // `trigger` means the item set is about to change (tab / watched_orgs),
-    // so we reset the diff anchors and wake the worker. `badge_dirty` is
-    // the filter-only path that doesn't need a refetch.
-    let (trigger, badge_dirty) = handle.with_state(|s| {
-        // First push from the frontend always wakes the worker — the
-        // main loop is parked on `config_applied` and the tab/orgs may
-        // happen to equal the defaults, which would leave `trigger`
-        // false and strand the worker forever.
-        let first_apply = !s.config_applied;
-        s.config_applied = true;
-        let mut trigger = first_apply;
-        let mut badge_dirty = false;
-        if let Some(tab) = config.tab {
-            if tab != s.tab {
-                s.tab = tab;
-                s.has_loaded_once = false;
-                s.prev_items.clear();
-                s.prev_thread_updated_at.clear();
-                trigger = true;
-            }
-        }
-        if let Some(orgs) = config.watched_orgs {
-            if orgs != s.watched_orgs {
-                s.watched_orgs = orgs;
-                s.has_loaded_once = false;
-                s.prev_items.clear();
-                s.prev_thread_updated_at.clear();
-                trigger = true;
-            }
-        }
-        if let Some(excluded) = config.excluded_repos {
-            let next: HashSet<String> = excluded.into_iter().collect();
-            if next != s.excluded_repos {
-                s.excluded_repos = next;
-                badge_dirty = true;
-            }
-        }
-        if let Some(hidden) = config.hidden_items {
-            let next: HashSet<u64> = hidden.into_iter().collect();
-            if next != s.hidden_items {
-                s.hidden_items = next;
-                badge_dirty = true;
-            }
-        }
-        if let Some(notify) = config.notify_enabled {
-            s.notify_enabled = notify;
-        }
-        if let Some(ms) = config.interval_ms {
-            s.interval_ms = ms.max(MIN_INTERVAL_MS);
-        }
-        (trigger, badge_dirty)
-    });
+    let (trigger, badge_dirty) = handle.with_state(|s| apply_background_config(s, config));
     if trigger {
         handle.trigger_refresh();
     } else if badge_dirty {
@@ -1053,5 +1108,160 @@ mod notification_body_tests {
         assert!(!notif_reason_is_comment("assign"));
         assert!(!notif_reason_is_comment("author"));
         assert!(!notif_reason_is_comment(""));
+    }
+}
+
+#[cfg(test)]
+mod apply_background_config_tests {
+    use super::*;
+    use crate::github::WatchedItem;
+
+    fn make_item(id: u64) -> WatchedItem {
+        WatchedItem {
+            id,
+            kind: "pr",
+            title: "t".into(),
+            number: id,
+            repo: "o/r".into(),
+            url: "".into(),
+            author: "".into(),
+            author_avatar: "".into(),
+            comments: 0,
+            updated_at: "2026-01-01T00:00:00Z".into(),
+            state: "open",
+            is_draft: false,
+            reviewers: Vec::new(),
+            commenters: Vec::new(),
+            ci_status: None,
+            latest_comment: None,
+        }
+    }
+
+    fn seed_loaded_state(s: &mut BackgroundState, tab: Tab) {
+        s.config_applied = true;
+        s.has_loaded_once = true;
+        s.tab = tab;
+        let item = make_item(42);
+        s.prev_items.insert(item.id, item);
+        s.prev_thread_updated_at.insert(7, "t1".into());
+    }
+
+    fn config_with_tab(tab: Tab) -> BackgroundConfig {
+        BackgroundConfig {
+            tab: Some(tab),
+            watched_orgs: None,
+            excluded_repos: None,
+            hidden_items: None,
+            notify_enabled: None,
+            interval_ms: None,
+        }
+    }
+
+    #[test]
+    fn tab_switch_clears_anchors_and_bumps_generation() {
+        // Regression: without bumping generation, an in-flight cycle's
+        // write-back would re-populate `prev_items` with the OLD tab's
+        // items, and the next cycle (querying the NEW tab) would diff
+        // against those — firing spurious "Closed" / "New in list"
+        // notifications for items that simply fell outside the new filter.
+        let mut s = BackgroundState::new();
+        seed_loaded_state(&mut s, Tab::All);
+        let before = s.config_generation;
+
+        let (trigger, badge_dirty) = apply_background_config(&mut s, config_with_tab(Tab::Review));
+
+        assert!(trigger, "tab change must wake the worker");
+        assert!(!badge_dirty);
+        assert_eq!(s.tab, Tab::Review);
+        assert!(!s.has_loaded_once, "tab change must reset has_loaded_once");
+        assert!(s.prev_items.is_empty());
+        assert!(s.prev_thread_updated_at.is_empty());
+        assert_ne!(
+            s.config_generation, before,
+            "tab change must advance config_generation so an in-flight \
+             cycle can detect its anchors are stale"
+        );
+    }
+
+    #[test]
+    fn watched_orgs_change_bumps_generation() {
+        // Same race applies for watched_orgs: it's part of the search query.
+        let mut s = BackgroundState::new();
+        seed_loaded_state(&mut s, Tab::All);
+        let before = s.config_generation;
+
+        let (trigger, _) = apply_background_config(
+            &mut s,
+            BackgroundConfig {
+                tab: None,
+                watched_orgs: Some(vec!["acme".into()]),
+                excluded_repos: None,
+                hidden_items: None,
+                notify_enabled: None,
+                interval_ms: None,
+            },
+        );
+
+        assert!(trigger);
+        assert_ne!(s.config_generation, before);
+        assert!(s.prev_items.is_empty());
+    }
+
+    #[test]
+    fn no_op_tab_change_does_not_bump_generation() {
+        // Pushing the same tab back must not invalidate anchors —
+        // otherwise switchTab idempotency would silently drop the
+        // legitimate diff history every refresh.
+        let mut s = BackgroundState::new();
+        seed_loaded_state(&mut s, Tab::Review);
+        let before = s.config_generation;
+
+        let (trigger, _) = apply_background_config(&mut s, config_with_tab(Tab::Review));
+
+        assert!(!trigger);
+        assert_eq!(s.config_generation, before);
+        assert!(!s.prev_items.is_empty(), "anchors must survive no-op apply");
+    }
+
+    #[test]
+    fn excluded_repos_change_does_not_bump_generation() {
+        // excluded_repos is a frontend-side filter and doesn't change the
+        // worker's fetch — bumping generation here would needlessly throw
+        // away a perfectly valid diff anchor on every settings tweak.
+        let mut s = BackgroundState::new();
+        seed_loaded_state(&mut s, Tab::All);
+        let before = s.config_generation;
+
+        let (trigger, badge_dirty) = apply_background_config(
+            &mut s,
+            BackgroundConfig {
+                tab: None,
+                watched_orgs: None,
+                excluded_repos: Some(vec!["o/r".into()]),
+                hidden_items: None,
+                notify_enabled: None,
+                interval_ms: None,
+            },
+        );
+
+        assert!(!trigger);
+        assert!(badge_dirty);
+        assert_eq!(s.config_generation, before);
+    }
+
+    #[test]
+    fn reset_session_bumps_generation() {
+        // sign-out / 401 resetting the session must invalidate any in-flight
+        // cycle so its write-back can't resurrect items + authenticated=true
+        // after the user signed out.
+        let mut s = BackgroundState::new();
+        seed_loaded_state(&mut s, Tab::All);
+        s.authenticated = true;
+        let before = s.config_generation;
+
+        s.reset_session(None);
+
+        assert!(!s.authenticated);
+        assert_ne!(s.config_generation, before);
     }
 }
