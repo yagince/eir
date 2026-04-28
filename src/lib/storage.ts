@@ -1,4 +1,4 @@
-import type { Tab } from "$lib/types";
+import type { Tab, ViewMode } from "$lib/types";
 
 export const TAB_KEY = "eir.tab";
 export const INTERVAL_KEY = "eir.refreshMs";
@@ -10,6 +10,7 @@ export const WATCHED_ORGS_KEY = "eir.watchedOrgs";
 export const THEME_KEY = "eir.theme";
 export const UNREAD_ONLY_KEY = "eir.unreadOnly";
 export const SHOW_LATEST_COMMENT_KEY = "eir.showLatestComment";
+export const VIEW_MODE_KEY = "eir.viewMode";
 
 export const DEFAULT_REFRESH_MS = 60_000;
 
@@ -126,4 +127,13 @@ export function loadShowLatestComment(): boolean {
 
 export function persistShowLatestComment(enabled: boolean): void {
   localStorage.setItem(SHOW_LATEST_COMMENT_KEY, enabled ? "1" : "0");
+}
+
+export function loadViewMode(): ViewMode {
+  const raw = localStorage.getItem(VIEW_MODE_KEY);
+  return raw === "recent" ? "recent" : "grouped";
+}
+
+export function persistViewMode(value: ViewMode): void {
+  localStorage.setItem(VIEW_MODE_KEY, value);
 }

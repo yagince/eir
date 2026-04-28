@@ -4,6 +4,7 @@ import {
   filterBySearch,
   filterVisible,
   flattenCommentBody,
+  groupByRecent,
   groupByRepo,
   itemKey,
   relativeTime,
@@ -198,6 +199,84 @@ describe("groupByRepo", () => {
     const groups = groupByRepo(items, (i) => i.id === 1, new Set([1, 2]));
     expect(groups[0].kind).toBe("pinned");
     expect(groups[0].unreadCount).toBe(1);
+  });
+});
+
+describe("groupByRecent", () => {
+  it("returns a single flat group sorted by updated_at desc", () => {
+    const items = [
+      makeItem({
+        id: 1,
+        repo: "a/a",
+        number: 1,
+        updated_at: "2026-04-10T00:00:00Z",
+      }),
+      makeItem({
+        id: 2,
+        repo: "b/b",
+        number: 2,
+        updated_at: "2026-04-19T00:00:00Z",
+      }),
+      makeItem({
+        id: 3,
+        repo: "a/a",
+        number: 3,
+        updated_at: "2026-04-18T00:00:00Z",
+      }),
+    ];
+    const groups = groupByRecent(items, () => false);
+    expect(groups.length).toBe(1);
+    expect(groups[0].kind).toBe("flat");
+    expect(groups[0].items.map((i) => i.id)).toEqual([2, 3, 1]);
+  });
+
+  it("places pinned items in a dedicated top group, flat group with the rest", () => {
+    const items = [
+      makeItem({
+        id: 1,
+        repo: "a/a",
+        number: 1,
+        updated_at: "2026-04-10T00:00:00Z",
+      }),
+      makeItem({
+        id: 2,
+        repo: "b/b",
+        number: 2,
+        updated_at: "2026-04-19T00:00:00Z",
+      }),
+      makeItem({
+        id: 3,
+        repo: "a/a",
+        number: 3,
+        updated_at: "2026-04-18T00:00:00Z",
+      }),
+    ];
+    const groups = groupByRecent(items, () => false, new Set([2]));
+    expect(groups.map((g) => g.kind)).toEqual(["pinned", "flat"]);
+    expect(groups[0].items.map((i) => i.id)).toEqual([2]);
+    expect(groups[1].items.map((i) => i.id)).toEqual([3, 1]);
+  });
+
+  it("counts unread inside the flat group", () => {
+    const items = [
+      makeItem({ id: 1, repo: "a/a", number: 1 }),
+      makeItem({ id: 2, repo: "b/b", number: 2 }),
+      makeItem({ id: 3, repo: "c/c", number: 3 }),
+    ];
+    const unread = new Set([1, 3]);
+    const groups = groupByRecent(items, (i) => unread.has(i.id));
+    expect(groups[0].kind).toBe("flat");
+    expect(groups[0].unreadCount).toBe(2);
+  });
+
+  it("omits the flat group when nothing is left after pinning", () => {
+    const items = [makeItem({ id: 1, repo: "a/a", number: 1 })];
+    const groups = groupByRecent(items, () => false, new Set([1]));
+    expect(groups.map((g) => g.kind)).toEqual(["pinned"]);
+  });
+
+  it("returns no groups for an empty input", () => {
+    expect(groupByRecent([], () => false)).toEqual([]);
   });
 });
 

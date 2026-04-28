@@ -56,10 +56,12 @@ export type NotificationItem = {
 
 export type Tab = "all" | "authored" | "review" | "mentions" | "hidden";
 
+export type ViewMode = "grouped" | "recent";
+
 export type RepoGroup = {
   repo: string;
   items: WatchedItem[];
   mostRecent: string;
   unreadCount: number;
-  kind?: "pinned";
+  kind?: "pinned" | "flat";
 };

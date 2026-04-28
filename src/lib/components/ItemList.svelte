@@ -4,6 +4,7 @@
     NotificationItem,
     RepoGroup,
     Tab,
+    ViewMode,
     WatchedItem,
   } from "$lib/types";
 
@@ -21,6 +22,7 @@
     searchQuery: string;
     searchVisible: boolean;
     unreadOnly: boolean;
+    viewMode: ViewMode;
     showLatestComment: boolean;
     onRefresh: () => void;
     onMarkAllVisibleAsRead: () => void;
@@ -34,6 +36,7 @@
     onClearSearch: () => void;
     onCloseSearch: () => void;
     onToggleUnreadOnly: () => void;
+    onSetViewMode: (mode: ViewMode) => void;
   };
 
   let {
@@ -50,6 +53,7 @@
     searchQuery = $bindable(),
     searchVisible,
     unreadOnly,
+    viewMode,
     showLatestComment,
     onRefresh,
     onMarkAllVisibleAsRead,
@@ -63,7 +67,13 @@
     onClearSearch,
     onCloseSearch,
     onToggleUnreadOnly,
+    onSetViewMode,
   }: Props = $props();
+
+  const VIEW_MODES: { id: ViewMode; label: string; title: string }[] = [
+    { id: "grouped", label: "Repo", title: "Group by repository" },
+    { id: "recent", label: "Recent", title: "Sort by most recent activity" },
+  ];
 
   function onSearchKeyDown(e: KeyboardEvent) {
     if (e.key === "Escape") {
@@ -156,6 +166,41 @@
       <span class="filter-x" aria-hidden="true">×</span>
     {/if}
   </button>
+  <div
+    class="view-toggle"
+    role="group"
+    aria-label="View mode"
+    title="Toggle list view (R)"
+  >
+    {#each VIEW_MODES as mode (mode.id)}
+      <button
+        class="view-toggle-btn"
+        class:active={viewMode === mode.id}
+        onclick={() => onSetViewMode(mode.id)}
+        aria-pressed={viewMode === mode.id}
+        title={mode.title}
+        aria-label={mode.title}
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          {#if mode.id === "grouped"}
+            <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+          {:else}
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 7v5l3 2" />
+          {/if}
+        </svg>
+        <span>{mode.label}</span>
+      </button>
+    {/each}
+  </div>
 </div>
 {#if searchVisible || searchQuery !== ""}
   <div class="search" class:active={searchQuery !== ""}>
@@ -204,30 +249,36 @@
   </section>
 {:else}
   <ul class="list" class:dim={loading}>
-    {#each groups as group (group.kind === "pinned" ? "__pinned__" : group.repo)}
-      <li class="group" class:pinned={group.kind === "pinned"}>
-        <div class="group-header" class:pinned-header={group.kind === "pinned"}>
-          <span class="group-repo">
-            {#if group.kind === "pinned"}
-              <svg
-                class="group-pin-icon"
-                viewBox="0 0 24 24"
-                fill="currentColor"
-                aria-hidden="true"
-              >
-                <path
-                  d="M16 4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v3.8l-2.4 2.4A2 2 0 0 0 5 11.6V13h6v8l1 1 1-1v-8h6v-1.4a2 2 0 0 0-.6-1.4L16 7.8z"
-                />
-              </svg>
-              Pinned
-            {:else}
-              {group.repo}
+    {#each groups as group (group.kind ?? group.repo)}
+      <li
+        class="group"
+        class:pinned={group.kind === "pinned"}
+        class:flat={group.kind === "flat"}
+      >
+        {#if group.kind !== "flat"}
+          <div class="group-header" class:pinned-header={group.kind === "pinned"}>
+            <span class="group-repo">
+              {#if group.kind === "pinned"}
+                <svg
+                  class="group-pin-icon"
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  aria-hidden="true"
+                >
+                  <path
+                    d="M16 4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v3.8l-2.4 2.4A2 2 0 0 0 5 11.6V13h6v8l1 1 1-1v-8h6v-1.4a2 2 0 0 0-.6-1.4L16 7.8z"
+                  />
+                </svg>
+                Pinned
+              {:else}
+                {group.repo}
+              {/if}
+            </span>
+            {#if group.unreadCount > 0}
+              <span class="group-count">{group.unreadCount}</span>
             {/if}
-          </span>
-          {#if group.unreadCount > 0}
-            <span class="group-count">{group.unreadCount}</span>
-          {/if}
-        </div>
+          </div>
+        {/if}
         <ul class="group-items">
           {#each group.items as item (item.id)}
             <li class="item-row" data-item-id={item.id}>
@@ -249,6 +300,10 @@
                     <span class="title-text">{item.title}</span>
                   </span>
                   <span class="meta">
+                    {#if viewMode === "recent"}
+                      <span class="repo-chip" title={item.repo}>{item.repo}</span>
+                      <span class="sep">·</span>
+                    {/if}
                     <img
                       class="avatar"
                       src={item.author_avatar}
@@ -479,6 +534,55 @@
     font-size: 13px;
     line-height: 1;
     opacity: 0.8;
+  }
+
+  .view-toggle {
+    display: inline-flex;
+    margin-left: auto;
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    overflow: hidden;
+    background: none;
+  }
+
+  .view-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.5;
+    border: none;
+    background: none;
+    color: var(--fg-muted);
+    cursor: pointer;
+  }
+
+  .view-toggle-btn:hover {
+    background: var(--hover-bg);
+  }
+
+  .view-toggle-btn.active {
+    background: var(--accent-bg);
+    color: var(--accent);
+  }
+
+  .view-toggle-btn svg {
+    width: 11px;
+    height: 11px;
+    display: block;
+  }
+
+  .repo-chip {
+    flex-shrink: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+    color: var(--fg);
+    opacity: 0.85;
   }
 
   .tabs {
