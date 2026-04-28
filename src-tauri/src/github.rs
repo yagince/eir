@@ -113,7 +113,16 @@ fn queries_for_tab(tab: &str, watched_orgs: &[String]) -> Vec<String> {
             "is:open is:pr review-requested:@me archived:false".into(),
             "is:open is:pr reviewed-by:@me archived:false".into(),
         ],
-        "mentions" => vec!["is:open mentions:@me archived:false".into()],
+        // GitHub Search の `mentions:` は本文 (body) しかマッチせず、コメント内
+        // でのメンションは拾えない。`commenter:@me` を OR でユニオンして、
+        // 自分がコメントしている (＝多くの場合メンションへの反応として参加した)
+        // 会話までカバーする。コメント内でメンションされてまだ返事していない
+        // ケースは Search の限界で取りこぼすが、Notifications API を使わない
+        // 範囲ではこれが現実的な近似。
+        "mentions" => vec![
+            "is:open mentions:@me archived:false".into(),
+            "is:open commenter:@me archived:false".into(),
+        ],
         _ => {
             let mut qs = vec![
                 "is:open involves:@me archived:false".into(),
@@ -1295,6 +1304,21 @@ mod tests {
     #[test]
     fn queries_for_tab_review_ignores_watched_orgs() {
         let qs = queries_for_tab("review", &["Lecto-inc".to_string()]);
+        assert_eq!(qs.len(), 2);
+        assert!(qs.iter().all(|q| !q.contains("user:")));
+    }
+
+    #[test]
+    fn queries_for_tab_mentions_includes_mentions_and_commenter() {
+        let qs = queries_for_tab("mentions", &[]);
+        assert_eq!(qs.len(), 2);
+        assert!(qs.iter().any(|q| q.contains("mentions:@me")));
+        assert!(qs.iter().any(|q| q.contains("commenter:@me")));
+    }
+
+    #[test]
+    fn queries_for_tab_mentions_ignores_watched_orgs() {
+        let qs = queries_for_tab("mentions", &["Lecto-inc".to_string()]);
         assert_eq!(qs.len(), 2);
         assert!(qs.iter().all(|q| !q.contains("user:")));
     }
