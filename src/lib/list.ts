@@ -81,24 +81,69 @@ export function filterBySearch(
   });
 }
 
+function splitPinned(
+  items: WatchedItem[],
+  pinnedIds: ReadonlySet<number>,
+): { pinned: WatchedItem[]; rest: WatchedItem[] } {
+  const pinned: WatchedItem[] = [];
+  const rest: WatchedItem[] = [];
+  for (const item of items) {
+    if (pinnedIds.has(item.id)) pinned.push(item);
+    else rest.push(item);
+  }
+  return { pinned, rest };
+}
+
+function makePinnedGroup(
+  pinned: WatchedItem[],
+  isUnread: (i: WatchedItem) => boolean,
+): RepoGroup | null {
+  if (pinned.length === 0) return null;
+  pinned.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  return {
+    repo: "Pinned",
+    items: pinned,
+    mostRecent: pinned[0].updated_at,
+    unreadCount: pinned.filter(isUnread).length,
+    kind: "pinned",
+  };
+}
+
+export function groupByRecent(
+  items: WatchedItem[],
+  isUnread: (i: WatchedItem) => boolean,
+  pinnedIds: ReadonlySet<number> = new Set(),
+): RepoGroup[] {
+  const { pinned, rest } = splitPinned(items, pinnedIds);
+  rest.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+
+  const groups: RepoGroup[] = [];
+  const pinnedGroup = makePinnedGroup(pinned, isUnread);
+  if (pinnedGroup) groups.push(pinnedGroup);
+  if (rest.length > 0) {
+    groups.push({
+      repo: "Recent",
+      items: rest,
+      mostRecent: rest[0].updated_at,
+      unreadCount: rest.filter(isUnread).length,
+      kind: "flat",
+    });
+  }
+  return groups;
+}
+
 export function groupByRepo(
   items: WatchedItem[],
   isUnread: (i: WatchedItem) => boolean,
   pinnedIds: ReadonlySet<number> = new Set(),
 ): RepoGroup[] {
-  const pinned: WatchedItem[] = [];
+  const { pinned, rest } = splitPinned(items, pinnedIds);
+
   const byRepo = new Map<string, WatchedItem[]>();
-  for (const item of items) {
-    if (pinnedIds.has(item.id)) {
-      pinned.push(item);
-      continue;
-    }
+  for (const item of rest) {
     const bucket = byRepo.get(item.repo);
-    if (bucket) {
-      bucket.push(item);
-    } else {
-      byRepo.set(item.repo, [item]);
-    }
+    if (bucket) bucket.push(item);
+    else byRepo.set(item.repo, [item]);
   }
 
   const repoGroups: RepoGroup[] = [];
@@ -113,17 +158,8 @@ export function groupByRepo(
   }
   repoGroups.sort((a, b) => b.mostRecent.localeCompare(a.mostRecent));
 
-  if (pinned.length === 0) return repoGroups;
-
-  pinned.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
-  const pinnedGroup: RepoGroup = {
-    repo: "Pinned",
-    items: pinned,
-    mostRecent: pinned[0].updated_at,
-    unreadCount: pinned.filter(isUnread).length,
-    kind: "pinned",
-  };
-  return [pinnedGroup, ...repoGroups];
+  const pinnedGroup = makePinnedGroup(pinned, isUnread);
+  return pinnedGroup ? [pinnedGroup, ...repoGroups] : repoGroups;
 }
 
 export function repoSuggestionsFrom(

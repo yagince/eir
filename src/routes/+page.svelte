@@ -20,6 +20,7 @@
   import {
     filterBySearch,
     filterVisible,
+    groupByRecent,
     groupByRepo,
     itemKey,
     repoSuggestionsFrom,
@@ -34,6 +35,7 @@
     loadTab,
     loadTheme,
     loadUnreadOnly,
+    loadViewMode,
     loadWatchedOrgs,
     persistExcludedRepos,
     persistHiddenItems,
@@ -44,10 +46,11 @@
     persistTab,
     persistTheme,
     persistUnreadOnly,
+    persistViewMode,
     persistWatchedOrgs,
     type Theme,
   } from "$lib/storage";
-  import type { NotificationItem, Tab, WatchedItem } from "$lib/types";
+  import type { NotificationItem, Tab, ViewMode, WatchedItem } from "$lib/types";
   import { dispatchShortcut, isEditableTarget, type Shortcut } from "$lib/shortcuts";
   import Auth from "$lib/components/Auth.svelte";
   import ItemList from "$lib/components/ItemList.svelte";
@@ -105,6 +108,7 @@
   let searchQuery = $state("");
   let searchVisible = $state(false);
   let unreadOnly = $state<boolean>(loadUnreadOnly());
+  let viewMode = $state<ViewMode>(loadViewMode());
 
   // The notification plugin's sendNotification() just invokes
   // `new window.Notification(title, options)` under the hood and throws away
@@ -507,6 +511,11 @@
       when: inLoadedPage,
       run: toggleUnreadOnly,
     },
+    {
+      key: "r",
+      when: inLoadedPage,
+      run: toggleViewMode,
+    },
   ];
 
   async function handleGlobalKey(e: KeyboardEvent) {
@@ -752,6 +761,16 @@
     persistUnreadOnly(unreadOnly);
   }
 
+  function setViewMode(mode: ViewMode) {
+    if (mode === viewMode) return;
+    viewMode = mode;
+    persistViewMode(mode);
+  }
+
+  function toggleViewMode() {
+    setViewMode(viewMode === "grouped" ? "recent" : "grouped");
+  }
+
   async function switchTab(tab: Tab) {
     if (tab === activeTab) return;
     activeTab = tab;
@@ -968,7 +987,7 @@
   );
 
   const groups = $derived(
-    groupByRepo(
+    (viewMode === "recent" ? groupByRecent : groupByRepo)(
       visibleItems,
       (i) => notificationsByKey.has(itemKey(i)),
       pinnedItems,
@@ -1138,6 +1157,7 @@
       {error}
       {searchVisible}
       {unreadOnly}
+      {viewMode}
       {showLatestComment}
       bind:searchQuery
       onRefresh={triggerRefresh}
@@ -1152,6 +1172,7 @@
       onClearSearch={clearSearch}
       onCloseSearch={closeSearch}
       onToggleUnreadOnly={toggleUnreadOnly}
+      onSetViewMode={setViewMode}
     />
   {/if}
 </main>
