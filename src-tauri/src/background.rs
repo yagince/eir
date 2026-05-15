@@ -139,6 +139,25 @@ impl BackgroundHandle {
         emit_state(app, self);
         update_tray_badge(app, self);
     }
+
+    /// Drop the given thread IDs from the cached notifications. Used by
+    /// `mark_notification_read` so an immediately-following `trigger_refresh`
+    /// doesn't emit a `loading=true` prelude carrying the stale unread set
+    /// (which would briefly re-mark items as unread before the actual fetch
+    /// completes). Also clears the matching diff anchors so the next cycle
+    /// doesn't treat the now-read thread as freshly removed.
+    pub fn remove_notifications(&self, thread_ids: &[u64]) {
+        if thread_ids.is_empty() {
+            return;
+        }
+        let set: HashSet<u64> = thread_ids.iter().copied().collect();
+        self.with_state(|s| {
+            s.notifications.retain(|n| !set.contains(&n.thread_id));
+            for id in &set {
+                s.prev_thread_updated_at.remove(id);
+            }
+        });
+    }
 }
 
 impl Default for BackgroundHandle {
