@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::auth::{clear_stored_token, AppState};
+use crate::background::BackgroundHandle;
 
 /// Error type for the inner fetch helpers that background tasks and Tauri
 /// commands share. The `is_unauthorized` flag lets callers decide whether to
@@ -993,6 +994,7 @@ pub async fn fetch_notifications(
 pub async fn mark_notification_read(
     thread_id: u64,
     auth: State<'_, Mutex<AppState>>,
+    background: State<'_, BackgroundHandle>,
 ) -> Result<(), String> {
     let octo = build_octo(&auth)?;
 
@@ -1002,7 +1004,15 @@ pub async fn mark_notification_read(
         .mark_as_read(NotificationId(thread_id))
         .await
     {
-        Ok(_) => Ok(()),
+        Ok(_) => {
+            // Drop the thread from the worker's cached notifications so any
+            // state-updated emit that races with a follow-up trigger_refresh
+            // (the prelude that flips `loading=true` and re-emits the current
+            // snapshot) doesn't briefly resurrect the unread dot before the
+            // GitHub fetch resolves with the now-read state.
+            background.remove_notifications(&[thread_id]);
+            Ok(())
+        }
         Err(err) => {
             let ge = GithubError::from_octocrab(err);
             if ge.is_unauthorized {
