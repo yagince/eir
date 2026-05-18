@@ -19,6 +19,8 @@
     refreshOptions: { value: number; label: string }[];
     notifyEnabled: boolean;
     showLatestComment: boolean;
+    includePRs: boolean;
+    includeIssues: boolean;
     theme: Theme;
     themeOptions: { value: Theme; label: string }[];
     autostartEnabled: boolean | null;
@@ -40,6 +42,8 @@
     onIntervalChange: (value: number) => void;
     onNotifyChange: (enabled: boolean) => void;
     onShowLatestCommentChange: (enabled: boolean) => void;
+    onIncludePRsChange: (enabled: boolean) => void;
+    onIncludeIssuesChange: (enabled: boolean) => void;
     onThemeChange: (value: Theme) => void;
     onToggleAutostart: (enabled: boolean) => void;
     onSendTestNotification: () => void;
@@ -59,6 +63,8 @@
     refreshOptions,
     notifyEnabled,
     showLatestComment,
+    includePRs,
+    includeIssues,
     theme,
     themeOptions,
     autostartEnabled,
@@ -80,6 +86,8 @@
     onIntervalChange,
     onNotifyChange,
     onShowLatestCommentChange,
+    onIncludePRsChange,
+    onIncludeIssuesChange,
     onThemeChange,
     onToggleAutostart,
     onSendTestNotification,
@@ -168,6 +176,30 @@
         type="checkbox"
         checked={showLatestComment}
         onchange={(e) => onShowLatestCommentChange(e.currentTarget.checked)}
+      />
+    </label>
+    <label
+      class="setting-row"
+      title="Turn off to hide PRs across every tab and watched org."
+    >
+      <span class="setting-label">Include PRs</span>
+      <input
+        type="checkbox"
+        checked={includePRs}
+        disabled={includePRs && !includeIssues}
+        onchange={(e) => onIncludePRsChange(e.currentTarget.checked)}
+      />
+    </label>
+    <label
+      class="setting-row"
+      title="Turn off to hide Issues across every tab and watched org."
+    >
+      <span class="setting-label">Include Issues</span>
+      <input
+        type="checkbox"
+        checked={includeIssues}
+        disabled={includeIssues && !includePRs}
+        onchange={(e) => onIncludeIssuesChange(e.currentTarget.checked)}
       />
     </label>
     <label class="setting-row">
@@ -259,7 +291,7 @@
         <p class="setting-hint">
           Only your personal repos and items you're involved with show up in
           All. Add an org login (e.g. <code>Lecto-inc</code>) to pull in all
-          open PRs from that org — catches dependabot PRs in org repos.
+          open items from that org — respects the PR / Issue toggles above.
         </p>
       {:else}
         <ul class="excluded-list">

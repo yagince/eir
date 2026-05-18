@@ -79,6 +79,8 @@ pub struct BackgroundState {
     pub hidden_items: HashSet<u64>,
     pub notify_enabled: bool,
     pub interval_ms: u64,
+    pub include_prs: bool,
+    pub include_issues: bool,
 }
 
 impl BackgroundState {
@@ -86,6 +88,8 @@ impl BackgroundState {
         Self {
             notify_enabled: true,
             interval_ms: DEFAULT_INTERVAL_MS,
+            include_prs: true,
+            include_issues: true,
             ..Default::default()
         }
     }
@@ -374,19 +378,30 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
     // before any await so the state stays contended-free while fetching.
     // `generation` lets the write-back detect a tab/orgs change that landed
     // mid-cycle and discard stale anchors.
-    let (tab, watched_orgs, has_loaded_once, prev_items, prev_threads, notify_enabled, generation) =
-        handle.with_state(|s| {
-            s.loading = true;
-            (
-                s.tab,
-                s.watched_orgs.clone(),
-                s.has_loaded_once,
-                std::mem::take(&mut s.prev_items),
-                std::mem::take(&mut s.prev_thread_updated_at),
-                s.notify_enabled,
-                s.config_generation,
-            )
-        });
+    let (
+        tab,
+        watched_orgs,
+        has_loaded_once,
+        prev_items,
+        prev_threads,
+        notify_enabled,
+        generation,
+        include_prs,
+        include_issues,
+    ) = handle.with_state(|s| {
+        s.loading = true;
+        (
+            s.tab,
+            s.watched_orgs.clone(),
+            s.has_loaded_once,
+            std::mem::take(&mut s.prev_items),
+            std::mem::take(&mut s.prev_thread_updated_at),
+            s.notify_enabled,
+            s.config_generation,
+            s.include_prs,
+            s.include_issues,
+        )
+    });
     emit_state(app, handle);
 
     let octo = match build_octocrab(&token) {
@@ -408,7 +423,13 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
     // The partial-emit callbacks skip the write when `config_generation`
     // has advanced so old-tab items don't briefly flash into the new-tab UI.
     let (items_res, notifs_res) = drive_progressive_fetches(
-        fetch_watched_with(&octo, tab.as_query_key(), &watched_orgs),
+        fetch_watched_with(
+            &octo,
+            tab.as_query_key(),
+            &watched_orgs,
+            include_prs,
+            include_issues,
+        ),
         fetch_notifications_with(&octo),
         |items| {
             let applied = handle.with_state(|s| {
@@ -693,6 +714,8 @@ pub struct BackgroundConfig {
     pub hidden_items: Option<Vec<u64>>,
     pub notify_enabled: Option<bool>,
     pub interval_ms: Option<u64>,
+    pub include_prs: Option<bool>,
+    pub include_issues: Option<bool>,
 }
 
 /// Apply a config patch to the background state. Pulled out of the Tauri
@@ -751,6 +774,24 @@ fn apply_background_config(s: &mut BackgroundState, config: BackgroundConfig) ->
     }
     if let Some(ms) = config.interval_ms {
         s.interval_ms = ms.max(MIN_INTERVAL_MS);
+    }
+    // include_prs/include_issues change the search query — treat them like
+    // tab/watched_orgs: invalidate the diff anchors and bump the generation
+    // so an in-flight cycle's write-back can detect the staleness. Refuse a
+    // patch that would leave both off; the frontend already guards but a
+    // malformed import shouldn't strand the worker with nothing to fetch.
+    let next_include_prs = config.include_prs.unwrap_or(s.include_prs);
+    let next_include_issues = config.include_issues.unwrap_or(s.include_issues);
+    let include_dirty =
+        next_include_prs != s.include_prs || next_include_issues != s.include_issues;
+    if (next_include_prs || next_include_issues) && include_dirty {
+        s.include_prs = next_include_prs;
+        s.include_issues = next_include_issues;
+        s.has_loaded_once = false;
+        s.prev_items.clear();
+        s.prev_thread_updated_at.clear();
+        s.config_generation = s.config_generation.wrapping_add(1);
+        trigger = true;
     }
     (trigger, badge_dirty)
 }
@@ -1173,6 +1214,21 @@ mod apply_background_config_tests {
             hidden_items: None,
             notify_enabled: None,
             interval_ms: None,
+            include_prs: None,
+            include_issues: None,
+        }
+    }
+
+    fn empty_config() -> BackgroundConfig {
+        BackgroundConfig {
+            tab: None,
+            watched_orgs: None,
+            excluded_repos: None,
+            hidden_items: None,
+            notify_enabled: None,
+            interval_ms: None,
+            include_prs: None,
+            include_issues: None,
         }
     }
 
@@ -1212,12 +1268,8 @@ mod apply_background_config_tests {
         let (trigger, _) = apply_background_config(
             &mut s,
             BackgroundConfig {
-                tab: None,
                 watched_orgs: Some(vec!["acme".into()]),
-                excluded_repos: None,
-                hidden_items: None,
-                notify_enabled: None,
-                interval_ms: None,
+                ..empty_config()
             },
         );
 
@@ -1254,18 +1306,89 @@ mod apply_background_config_tests {
         let (trigger, badge_dirty) = apply_background_config(
             &mut s,
             BackgroundConfig {
-                tab: None,
-                watched_orgs: None,
                 excluded_repos: Some(vec!["o/r".into()]),
-                hidden_items: None,
-                notify_enabled: None,
-                interval_ms: None,
+                ..empty_config()
             },
         );
 
         assert!(!trigger);
         assert!(badge_dirty);
         assert_eq!(s.config_generation, before);
+    }
+
+    #[test]
+    fn include_toggle_change_bumps_generation() {
+        // Same race story as tab / watched_orgs: include_prs / include_issues
+        // change the GraphQL query, so an in-flight cycle's anchors are now
+        // stale.
+        let mut s = BackgroundState::new();
+        seed_loaded_state(&mut s, Tab::All);
+        let before = s.config_generation;
+
+        let (trigger, _) = apply_background_config(
+            &mut s,
+            BackgroundConfig {
+                include_prs: Some(true),
+                include_issues: Some(false),
+                ..empty_config()
+            },
+        );
+
+        assert!(trigger);
+        assert!(s.include_prs);
+        assert!(!s.include_issues);
+        assert!(!s.has_loaded_once);
+        assert!(s.prev_items.is_empty());
+        assert_ne!(s.config_generation, before);
+    }
+
+    #[test]
+    fn include_toggle_no_op_does_not_bump_generation() {
+        // Pushing the same flags back must not invalidate anchors —
+        // e.g. importing settings that match current values shouldn't
+        // wipe the diff history.
+        let mut s = BackgroundState::new();
+        seed_loaded_state(&mut s, Tab::All);
+        let before = s.config_generation;
+
+        let (trigger, _) = apply_background_config(
+            &mut s,
+            BackgroundConfig {
+                include_prs: Some(true),
+                include_issues: Some(true),
+                ..empty_config()
+            },
+        );
+
+        assert!(!trigger);
+        assert_eq!(s.config_generation, before);
+        assert!(!s.prev_items.is_empty());
+    }
+
+    #[test]
+    fn include_toggle_both_off_is_rejected() {
+        // The frontend already prevents this via the disabled checkbox, but
+        // a malformed import shouldn't strand the worker with nothing to
+        // query — silently keep the previous flags instead.
+        let mut s = BackgroundState::new();
+        seed_loaded_state(&mut s, Tab::All);
+        let before_prs = s.include_prs;
+        let before_issues = s.include_issues;
+        let before_gen = s.config_generation;
+
+        let (trigger, _) = apply_background_config(
+            &mut s,
+            BackgroundConfig {
+                include_prs: Some(false),
+                include_issues: Some(false),
+                ..empty_config()
+            },
+        );
+
+        assert!(!trigger);
+        assert_eq!(s.include_prs, before_prs);
+        assert_eq!(s.include_issues, before_issues);
+        assert_eq!(s.config_generation, before_gen);
     }
 
     #[test]

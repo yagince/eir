@@ -11,6 +11,8 @@ export const THEME_KEY = "eir.theme";
 export const UNREAD_ONLY_KEY = "eir.unreadOnly";
 export const SHOW_LATEST_COMMENT_KEY = "eir.showLatestComment";
 export const VIEW_MODE_KEY = "eir.viewMode";
+export const INCLUDE_PRS_KEY = "eir.includePRs";
+export const INCLUDE_ISSUES_KEY = "eir.includeIssues";
 
 export const DEFAULT_REFRESH_MS = 60_000;
 
@@ -136,4 +138,20 @@ export function loadViewMode(): ViewMode {
 
 export function persistViewMode(value: ViewMode): void {
   localStorage.setItem(VIEW_MODE_KEY, value);
+}
+
+export function loadIncludePRs(): boolean {
+  return localStorage.getItem(INCLUDE_PRS_KEY) !== "0";
+}
+
+export function persistIncludePRs(enabled: boolean): void {
+  localStorage.setItem(INCLUDE_PRS_KEY, enabled ? "1" : "0");
+}
+
+export function loadIncludeIssues(): boolean {
+  return localStorage.getItem(INCLUDE_ISSUES_KEY) !== "0";
+}
+
+export function persistIncludeIssues(enabled: boolean): void {
+  localStorage.setItem(INCLUDE_ISSUES_KEY, enabled ? "1" : "0");
 }

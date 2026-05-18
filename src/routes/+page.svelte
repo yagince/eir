@@ -28,6 +28,8 @@
   import {
     loadExcludedRepos,
     loadHiddenItems,
+    loadIncludeIssues,
+    loadIncludePRs,
     loadInterval,
     loadNotify,
     loadPinnedItems,
@@ -39,6 +41,8 @@
     loadWatchedOrgs,
     persistExcludedRepos,
     persistHiddenItems,
+    persistIncludeIssues,
+    persistIncludePRs,
     persistInterval,
     persistNotify,
     persistPinnedItems,
@@ -96,6 +100,8 @@
   let refreshMs = $state<number>(loadInterval());
   let notifyEnabled = $state<boolean>(loadNotify());
   let showLatestComment = $state<boolean>(loadShowLatestComment());
+  let includePRs = $state<boolean>(loadIncludePRs());
+  let includeIssues = $state<boolean>(loadIncludeIssues());
   let theme = $state<Theme>(loadTheme());
   let systemDark = $state<boolean>(
     window.matchMedia("(prefers-color-scheme: dark)").matches,
@@ -216,6 +222,8 @@
       watchedOrgs?: string[];
       excludedRepos?: string[];
       hiddenItems?: number[];
+      includePRs?: boolean;
+      includeIssues?: boolean;
     } = {},
   ) {
     await invoke("set_background_config", {
@@ -226,6 +234,8 @@
         watchedOrgs: patch.watchedOrgs,
         excludedRepos: patch.excludedRepos,
         hiddenItems: patch.hiddenItems,
+        includePrs: patch.includePRs,
+        includeIssues: patch.includeIssues,
       },
     }).catch((e) => console.warn("[eir] set_background_config failed:", e));
   }
@@ -238,6 +248,8 @@
       watchedOrgs: [...watchedOrgs],
       excludedRepos: [...excludedRepos],
       hiddenItems: [...hiddenItems],
+      includePRs,
+      includeIssues,
     });
   }
 
@@ -702,6 +714,25 @@
     persistShowLatestComment(enabled);
   }
 
+  async function onIncludePRsChange(enabled: boolean) {
+    // Guard against the disabled-checkbox case getting bypassed (keyboard /
+    // automation): turning both off would leave the worker with nothing to
+    // fetch and the list permanently empty.
+    if (!enabled && !includeIssues) return;
+    includePRs = enabled;
+    persistIncludePRs(enabled);
+    items = [];
+    await pushBackgroundConfig({ includePRs: enabled });
+  }
+
+  async function onIncludeIssuesChange(enabled: boolean) {
+    if (!enabled && !includePRs) return;
+    includeIssues = enabled;
+    persistIncludeIssues(enabled);
+    items = [];
+    await pushBackgroundConfig({ includeIssues: enabled });
+  }
+
   function hideItem(id: number) {
     hiddenItems.add(id);
     persistHiddenItems(hiddenItems);
@@ -788,6 +819,8 @@
     refreshMs?: number;
     notifyEnabled?: boolean;
     showLatestComment?: boolean;
+    includePRs?: boolean;
+    includeIssues?: boolean;
     theme?: Theme;
     excludedRepos?: string[];
     watchedOrgs?: string[];
@@ -802,6 +835,8 @@
       refreshMs,
       notifyEnabled,
       showLatestComment,
+      includePRs,
+      includeIssues,
       theme,
       excludedRepos: [...excludedRepos].sort(),
       watchedOrgs: [...watchedOrgs].sort(),
@@ -882,6 +917,36 @@
     if (typeof data.showLatestComment === "boolean") {
       onShowLatestCommentChange(data.showLatestComment);
       applied.push("latest comment preview");
+    }
+
+    // Apply include flags raw (skipping the both-off guard in the change
+    // handlers) so a valid export with both true / one true survives, and a
+    // (defensive) both-false case falls through to the next field rather than
+    // mutating state — pushFullConfig at the end re-syncs the worker either
+    // way.
+    const nextIncludePRs =
+      typeof data.includePRs === "boolean" ? data.includePRs : includePRs;
+    const nextIncludeIssues =
+      typeof data.includeIssues === "boolean"
+        ? data.includeIssues
+        : includeIssues;
+    if (nextIncludePRs || nextIncludeIssues) {
+      if (
+        typeof data.includePRs === "boolean" &&
+        data.includePRs !== includePRs
+      ) {
+        includePRs = data.includePRs;
+        persistIncludePRs(data.includePRs);
+        applied.push("include PRs");
+      }
+      if (
+        typeof data.includeIssues === "boolean" &&
+        data.includeIssues !== includeIssues
+      ) {
+        includeIssues = data.includeIssues;
+        persistIncludeIssues(data.includeIssues);
+        applied.push("include Issues");
+      }
     }
 
     if (
@@ -1075,6 +1140,8 @@
       refreshOptions={REFRESH_OPTIONS}
       {notifyEnabled}
       {showLatestComment}
+      {includePRs}
+      {includeIssues}
       {theme}
       themeOptions={THEME_OPTIONS}
       {autostartEnabled}
@@ -1096,6 +1163,8 @@
       {onIntervalChange}
       {onNotifyChange}
       {onShowLatestCommentChange}
+      {onIncludePRsChange}
+      {onIncludeIssuesChange}
       {onThemeChange}
       onToggleAutostart={toggleAutostart}
       onSendTestNotification={sendTestNotification}

@@ -102,33 +102,77 @@ pub struct WatchedItem {
     pub latest_comment: Option<LatestComment>,
 }
 
-fn queries_for_tab(tab: &str, watched_orgs: &[String]) -> Vec<String> {
+/// Build the GraphQL `is:pr` / `is:issue` prefix list to splice into each
+/// query template. With both kinds enabled we want one unprefixed query so
+/// GitHub returns both types in a single search; with exactly one enabled we
+/// add the matching narrowing prefix. The both-off case is filtered at the
+/// caller, so `unreachable!` rather than producing a malformed query.
+fn kind_prefixes(include_prs: bool, include_issues: bool) -> Vec<&'static str> {
+    match (include_prs, include_issues) {
+        (true, true) => vec![""],
+        (true, false) => vec!["is:pr "],
+        (false, true) => vec!["is:issue "],
+        (false, false) => unreachable!("caller must short-circuit when both kinds are off"),
+    }
+}
+
+fn queries_for_tab(
+    tab: &str,
+    watched_orgs: &[String],
+    include_prs: bool,
+    include_issues: bool,
+) -> Vec<String> {
+    if !include_prs && !include_issues {
+        return Vec::new();
+    }
+    let kinds = kind_prefixes(include_prs, include_issues);
     match tab {
-        "authored" => vec!["is:open is:pr author:@me archived:false".into()],
+        "authored" => kinds
+            .iter()
+            .map(|k| format!("is:open {k}author:@me archived:false"))
+            .collect(),
         // Two queries unioned via the GraphQL alias batching in `fetch_watched`:
         // `review-requested` drops a PR out once you submit any review, so the
         // tab used to "empty itself" after commenting/approving. Adding
         // `reviewed-by` keeps PRs you've been assigned to — and touched —
         // visible until they're closed.
-        "review" => vec![
-            "is:open is:pr review-requested:@me archived:false".into(),
-            "is:open is:pr reviewed-by:@me archived:false".into(),
-        ],
+        //
+        // Review semantics are PR-only (issues have no review system), so this
+        // tab is empty when PRs are excluded — let the user see "nothing here"
+        // rather than firing a query that GitHub would silently return zero
+        // results for.
+        "review" => {
+            if !include_prs {
+                return Vec::new();
+            }
+            vec![
+                "is:open is:pr review-requested:@me archived:false".into(),
+                "is:open is:pr reviewed-by:@me archived:false".into(),
+            ]
+        }
         // GitHub Search の `mentions:` は本文 (body) しかマッチせず、コメント内
         // でのメンションは拾えない。`commenter:@me` を OR でユニオンして、
         // 自分がコメントしている (＝多くの場合メンションへの反応として参加した)
         // 会話までカバーする。コメント内でメンションされてまだ返事していない
         // ケースは Search の限界で取りこぼすが、Notifications API を使わない
         // 範囲ではこれが現実的な近似。
-        "mentions" => vec![
-            "is:open mentions:@me archived:false".into(),
-            "is:open commenter:@me archived:false".into(),
-        ],
+        "mentions" => kinds
+            .iter()
+            .flat_map(|k| {
+                [
+                    format!("is:open {k}mentions:@me archived:false"),
+                    format!("is:open {k}commenter:@me archived:false"),
+                ]
+            })
+            .collect(),
         _ => {
-            let mut qs = vec![
-                "is:open involves:@me archived:false".into(),
-                "is:open is:pr user:@me archived:false".into(),
-            ];
+            let mut qs: Vec<String> = Vec::new();
+            for k in &kinds {
+                qs.push(format!("is:open {k}involves:@me archived:false"));
+            }
+            for k in &kinds {
+                qs.push(format!("is:open {k}user:@me archived:false"));
+            }
             for org in watched_orgs {
                 // Allow-list characters to avoid breaking out of the
                 // qualifier. GitHub logins are [A-Za-z0-9-] only.
@@ -139,7 +183,9 @@ fn queries_for_tab(tab: &str, watched_orgs: &[String]) -> Vec<String> {
                 if clean.is_empty() {
                     continue;
                 }
-                qs.push(format!("is:open is:pr user:{clean} archived:false"));
+                for k in &kinds {
+                    qs.push(format!("is:open {k}user:{clean} archived:false"));
+                }
             }
             qs
         }
@@ -659,8 +705,17 @@ pub async fn fetch_watched_with(
     octo: &octocrab::Octocrab,
     tab: &str,
     watched_orgs: &[String],
+    include_prs: bool,
+    include_issues: bool,
 ) -> Result<Vec<WatchedItem>, GithubError> {
-    let queries = queries_for_tab(tab, watched_orgs);
+    let queries = queries_for_tab(tab, watched_orgs, include_prs, include_issues);
+    // No query templates for this combo (e.g. Review tab with PRs off, or a
+    // both-off config that slipped past the frontend guard). Skipping the
+    // GraphQL call keeps `build_search_query(0)` from producing an empty
+    // alias list, which GitHub rejects as a syntax error.
+    if queries.is_empty() {
+        return Ok(Vec::new());
+    }
     let query_str = build_search_query(queries.len());
     let variables: serde_json::Map<String, serde_json::Value> = queries
         .iter()
@@ -701,11 +756,15 @@ pub async fn fetch_watched_with(
 pub async fn fetch_watched(
     tab: String,
     watched_orgs: Option<Vec<String>>,
+    include_prs: Option<bool>,
+    include_issues: Option<bool>,
     auth: State<'_, Mutex<AppState>>,
 ) -> Result<Vec<WatchedItem>, String> {
     let octo = build_octo(&auth)?;
     let orgs = watched_orgs.unwrap_or_default();
-    match fetch_watched_with(&octo, &tab, &orgs).await {
+    let prs = include_prs.unwrap_or(true);
+    let issues = include_issues.unwrap_or(true);
+    match fetch_watched_with(&octo, &tab, &orgs, prs, issues).await {
         Ok(items) => Ok(items),
         Err(err) => {
             if err.is_unauthorized {
@@ -1282,7 +1341,7 @@ mod tests {
 
     #[test]
     fn queries_for_tab_all_includes_involves_and_user_self() {
-        let qs = queries_for_tab("all", &[]);
+        let qs = queries_for_tab("all", &[], true, true);
         assert_eq!(qs.len(), 2);
         assert!(qs[0].contains("involves:@me"));
         assert!(qs[1].contains("user:@me"));
@@ -1290,7 +1349,12 @@ mod tests {
 
     #[test]
     fn queries_for_tab_all_expands_watched_orgs() {
-        let qs = queries_for_tab("all", &["Lecto-inc".to_string(), "other".to_string()]);
+        let qs = queries_for_tab(
+            "all",
+            &["Lecto-inc".to_string(), "other".to_string()],
+            true,
+            true,
+        );
         assert_eq!(qs.len(), 4);
         assert!(qs[2].contains("user:Lecto-inc"));
         assert!(qs[3].contains("user:other"));
@@ -1298,14 +1362,14 @@ mod tests {
 
     #[test]
     fn queries_for_tab_mine_ignores_watched_orgs() {
-        let qs = queries_for_tab("authored", &["Lecto-inc".to_string()]);
+        let qs = queries_for_tab("authored", &["Lecto-inc".to_string()], true, true);
         assert_eq!(qs.len(), 1);
         assert!(qs[0].contains("author:@me"));
     }
 
     #[test]
     fn queries_for_tab_review_includes_requested_and_reviewed_by() {
-        let qs = queries_for_tab("review", &[]);
+        let qs = queries_for_tab("review", &[], true, true);
         assert_eq!(qs.len(), 2);
         assert!(qs.iter().any(|q| q.contains("review-requested:@me")));
         assert!(qs.iter().any(|q| q.contains("reviewed-by:@me")));
@@ -1313,14 +1377,14 @@ mod tests {
 
     #[test]
     fn queries_for_tab_review_ignores_watched_orgs() {
-        let qs = queries_for_tab("review", &["Lecto-inc".to_string()]);
+        let qs = queries_for_tab("review", &["Lecto-inc".to_string()], true, true);
         assert_eq!(qs.len(), 2);
         assert!(qs.iter().all(|q| !q.contains("user:")));
     }
 
     #[test]
     fn queries_for_tab_mentions_includes_mentions_and_commenter() {
-        let qs = queries_for_tab("mentions", &[]);
+        let qs = queries_for_tab("mentions", &[], true, true);
         assert_eq!(qs.len(), 2);
         assert!(qs.iter().any(|q| q.contains("mentions:@me")));
         assert!(qs.iter().any(|q| q.contains("commenter:@me")));
@@ -1328,23 +1392,98 @@ mod tests {
 
     #[test]
     fn queries_for_tab_mentions_ignores_watched_orgs() {
-        let qs = queries_for_tab("mentions", &["Lecto-inc".to_string()]);
+        let qs = queries_for_tab("mentions", &["Lecto-inc".to_string()], true, true);
         assert_eq!(qs.len(), 2);
         assert!(qs.iter().all(|q| !q.contains("user:")));
     }
 
     #[test]
     fn queries_for_tab_strips_unsafe_chars_from_org() {
-        let qs = queries_for_tab("all", &["bad org!".to_string()]);
+        let qs = queries_for_tab("all", &["bad org!".to_string()], true, true);
         // spaces and "!" get filtered out; "badorg" survives
         assert!(qs.last().unwrap().contains("user:badorg"));
     }
 
     #[test]
     fn queries_for_tab_drops_fully_invalid_org() {
-        let qs = queries_for_tab("all", &["!@#$".to_string()]);
+        let qs = queries_for_tab("all", &["!@#$".to_string()], true, true);
         // only the two base queries remain
         assert_eq!(qs.len(), 2);
+    }
+
+    #[test]
+    fn queries_for_tab_all_with_prs_only_prefixes_is_pr() {
+        // Issues off → every query in the tab gets an `is:pr` narrowing prefix
+        // so GitHub returns PRs alone. This preserves the pre-toggle default
+        // for users who don't want issue noise.
+        let qs = queries_for_tab("all", &["Lecto-inc".to_string()], true, false);
+        assert_eq!(qs.len(), 3);
+        assert!(qs.iter().all(|q| q.contains("is:pr ")));
+        assert!(qs.iter().all(|q| !q.contains("is:issue ")));
+    }
+
+    #[test]
+    fn queries_for_tab_all_with_issues_only_prefixes_is_issue() {
+        // PRs off → every query gets `is:issue`. Watched_orgs gains an
+        // `is:issue user:{org}` query, which is the fix for the original
+        // motivating bug: Sentry-bot-authored issues from a watched org
+        // showing up.
+        let qs = queries_for_tab("all", &["Lecto-inc".to_string()], false, true);
+        assert_eq!(qs.len(), 3);
+        assert!(qs.iter().all(|q| q.contains("is:issue ")));
+        assert!(qs.iter().all(|q| !q.contains("is:pr ")));
+        assert!(qs
+            .iter()
+            .any(|q| q.contains("is:issue user:Lecto-inc archived:false")));
+    }
+
+    #[test]
+    fn queries_for_tab_all_with_both_kinds_omits_kind_filter() {
+        // With both kinds on we want a single unprefixed query per template —
+        // GitHub returns both PullRequest and Issue nodes when no `is:`
+        // narrowing is supplied, so running both `is:pr` and `is:issue` would
+        // just double the request count for no extra coverage.
+        let qs = queries_for_tab("all", &["Lecto-inc".to_string()], true, true);
+        assert_eq!(qs.len(), 3);
+        assert!(qs.iter().all(|q| !q.contains("is:pr ")));
+        assert!(qs.iter().all(|q| !q.contains("is:issue ")));
+        assert!(qs
+            .iter()
+            .any(|q| q.contains("user:Lecto-inc archived:false")));
+    }
+
+    #[test]
+    fn queries_for_tab_review_is_empty_when_prs_off() {
+        // Reviews don't exist on issues — when the user has hidden PRs the
+        // tab should be empty rather than firing a query that GitHub would
+        // silently return zero rows for.
+        let qs = queries_for_tab("review", &[], false, true);
+        assert!(qs.is_empty());
+    }
+
+    #[test]
+    fn queries_for_tab_authored_with_issues_only_uses_is_issue() {
+        let qs = queries_for_tab("authored", &[], false, true);
+        assert_eq!(qs.len(), 1);
+        assert!(qs[0].contains("is:issue author:@me"));
+    }
+
+    #[test]
+    fn queries_for_tab_mentions_with_issues_only_filters_both_queries() {
+        let qs = queries_for_tab("mentions", &[], false, true);
+        assert_eq!(qs.len(), 2);
+        assert!(qs.iter().all(|q| q.contains("is:issue ")));
+    }
+
+    #[test]
+    fn queries_for_tab_both_off_returns_empty() {
+        // Defense in depth: the frontend disables the checkbox that would
+        // produce this state, but a stale config or a malformed import
+        // mustn't blow up the query builder.
+        assert!(queries_for_tab("all", &["Lecto-inc".to_string()], false, false).is_empty());
+        assert!(queries_for_tab("authored", &[], false, false).is_empty());
+        assert!(queries_for_tab("mentions", &[], false, false).is_empty());
+        assert!(queries_for_tab("review", &[], false, false).is_empty());
     }
 
     #[test]
