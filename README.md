@@ -10,14 +10,17 @@ Named after Eir, the Norse goddess of healing. The icon combines a watching eye 
 
 ## Features
 
-- **Menubar / system-tray only** — no taskbar entry; lives as a tray icon with a 380×520 popup (auto-expands to fill screen height on macOS)
+- **Menubar / system-tray only** — no taskbar entry; lives as a tray icon with a 440×680 popup (auto-expands to fill screen height on macOS)
 - **GitHub OAuth device flow** — sign in once, the token is stored in a per-user config file and survives restarts
 - **Grouped list** — PRs and Issues grouped by repository with sticky headers and per-repo unread counts
 - **Filter tabs** — All / Mine / Review Requests / Mentions / Hidden, backed by different GitHub search queries
-- **Auto-refresh** — silent background polling every 30s–5min (configurable)
-- **Native notifications** — desktop notifications when a new PR or Issue first appears (banner duration is set by the OS; on macOS, switch the style from *Banners* to *Alerts* under System Settings → Notifications → eir to keep them on screen until dismissed)
-- **Unread tracking** — macOS tray badge shows the unread count; Windows/Linux show it in the hover tooltip
-- **Global shortcut** — `Ctrl+Shift+E` toggles the popup from anywhere
+- **Per-repo overrides** — pin extra repos and toggle PRs/Issues inclusion per-repo, on top of global include settings
+- **Auto-refresh** — silent background polling (configurable interval), driven from Rust so updates keep flowing while the popup is hidden
+- **Native notifications** — desktop notifications when a new PR or Issue first appears, plus contextual reasons (new comments, CI failed, state changes); click a notification to open it in the browser. Banner duration is set by the OS; on macOS, switch the style from *Banners* to *Alerts* under System Settings → Notifications → eir to keep them on screen until dismissed.
+- **Unread tracking** — macOS tray badge shows the unread count with a red-dot icon variant; Windows/Linux show it in the hover tooltip
+- **Configurable global shortcut** — `Ctrl+Shift+E` by default; rebind from Settings
+- **In-app updater** — checks GitHub Releases on startup and from Settings, downloads the signed bundle, verifies its ed25519 signature, and relaunches
+- **Autostart** — optionally launch eir at login (macOS LaunchAgent / Windows registry / Linux .desktop)
 - **Light/dark aware** — template-mode tray icon on macOS and `prefers-color-scheme` styling everywhere
 
 ## Install
@@ -93,9 +96,14 @@ src/routes/+page.svelte       Single-page frontend (sign-in → list → setting
 src-tauri/src/
   lib.rs                      run(), plugins, window-focus handler
   auth.rs                     Device flow commands + cross-platform token file (mode-0600 on unix, %APPDATA% on Windows)
-  github.rs                   fetch_watched + query_for_tab
-  tray.rs                     Tray setup, toggle_popup, set_tray_badge
-  tauri.conf.json             Window config (380x520, hidden on launch, undecorated)
+  github.rs                   fetch_watched, fetch_notifications, fetch_item_states
+  background.rs               Long-lived Rust polling worker, diff detection, tray badge & notification emission
+  diff.rs                     Pure functions for "what changed" between two snapshots
+  tray.rs                     Tray setup, toggle_popup, set_tray_badge (template+badge on macOS, tooltip elsewhere)
+  shortcut.rs                 User-configurable global shortcut
+  updater.rs                  relaunch_app — macOS uses /usr/bin/open -n, others app.restart()
+  settings_io.rs              Read/write the settings JSON without plugin-fs
+  tauri.conf.json             Window config (440x680, hidden on launch, undecorated)
   icons/                      App & tray icons (tray-icon.png is template-mode)
 assets/icon-source/           Source PNGs used for icon generation
 ```

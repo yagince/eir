@@ -5,6 +5,7 @@ mod github;
 mod settings_io;
 mod shortcut;
 mod tray;
+mod updater;
 
 use std::sync::Mutex;
 
@@ -27,7 +28,6 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_autostart::init(
             // On macOS we use the modern LaunchAgent; no extra CLI args.
             MacosLauncher::LaunchAgent,
@@ -64,6 +64,7 @@ pub fn run() {
             background::get_background_state,
             background::trigger_refresh,
             background::set_background_config,
+            updater::relaunch_app,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
