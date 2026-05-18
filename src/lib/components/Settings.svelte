@@ -11,7 +11,6 @@
     | { kind: "up-to-date" }
     | { kind: "available"; update: Update }
     | { kind: "downloading" }
-    | { kind: "installed" }
     | { kind: "error"; message: string };
 
   type Props = {
@@ -247,8 +246,6 @@
           <span class="setting-hint-inline update-available"
             >· v{updateStatus.update.version} available</span
           >
-        {:else if updateStatus.kind === "installed"}
-          <span class="setting-hint-inline">· installed, relaunching…</span>
         {:else if updateStatus.kind === "error"}
           <span class="setting-hint-inline error-inline"
             >· {updateStatus.message}</span

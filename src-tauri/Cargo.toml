@@ -29,7 +29,6 @@ tauri-plugin-notification = "2.3.3"
 rustls = { version = "0.23.38", default-features = false, features = ["aws-lc-rs"] }
 tauri-plugin-global-shortcut = "2.3.1"
 tauri-plugin-updater = "2.10.1"
-tauri-plugin-process = "2.3.1"
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-dialog = "2.7.0"
 # Used to synthesise the red-dot badge variant of the tray icon at startup.

@@ -8,7 +8,6 @@
     requestPermission,
   } from "@tauri-apps/plugin-notification";
   import { check as checkForUpdate, Update } from "@tauri-apps/plugin-updater";
-  import { relaunch } from "@tauri-apps/plugin-process";
   import { ask, message, open, save } from "@tauri-apps/plugin-dialog";
   import {
     disable as disableAutostart,
@@ -144,7 +143,6 @@
     | { kind: "up-to-date" }
     | { kind: "available"; update: Update }
     | { kind: "downloading" }
-    | { kind: "installed" }
     | { kind: "error"; message: string };
   let updateStatus = $state<UpdateStatus>({ kind: "idle" });
   let appVersion = $state<string>("");
@@ -349,8 +347,7 @@
       // install state.
       if (
         updateStatus.kind === "available" ||
-        updateStatus.kind === "downloading" ||
-        updateStatus.kind === "installed"
+        updateStatus.kind === "downloading"
       ) {
         return;
       }
@@ -378,8 +375,7 @@
     updateStatus = { kind: "downloading" };
     try {
       await update.downloadAndInstall();
-      updateStatus = { kind: "installed" };
-      await relaunch();
+      await invoke("relaunch_app");
     } catch (e) {
       const message = String(e);
       console.warn("[eir] update install failed:", message);
