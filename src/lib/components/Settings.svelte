@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import type { Update } from "@tauri-apps/plugin-updater";
-  import type { Theme } from "$lib/storage";
+  import type { RepoSetting, Theme } from "$lib/storage";
   import { isTextCaretTarget } from "$lib/shortcuts";
 
   type UpdateStatus =
@@ -30,14 +30,14 @@
     shortcutError: string | null;
     updateStatus: UpdateStatus;
     watchedOrgs: SvelteSet<string>;
-    excludedRepos: SvelteSet<string>;
+    repoSettings: Map<string, RepoSetting>;
     orgSuggestions: string[];
     repoSuggestions: string[];
     error: string | null;
     settingsIoNotice: string | null;
     settingsIoError: string | null;
     newWatchedOrg: string;
-    newExcludedRepo: string;
+    newRepoOverride: string;
     onBack: () => void;
     onIntervalChange: (value: number) => void;
     onNotifyChange: (enabled: boolean) => void;
@@ -52,8 +52,9 @@
     onStartCaptureShortcut: () => void;
     onAddWatchedOrg: () => void;
     onRemoveWatchedOrg: (org: string) => void;
-    onAddExcludedRepo: () => void;
-    onRemoveExcludedRepo: (repo: string) => void;
+    onAddRepoOverride: () => void;
+    onRemoveRepoOverride: (repo: string) => void;
+    onUpdateRepoOverride: (repo: string, next: RepoSetting) => void;
     onExportSettings: () => void;
     onImportSettings: () => void;
   };
@@ -74,14 +75,14 @@
     shortcutError,
     updateStatus,
     watchedOrgs,
-    excludedRepos,
+    repoSettings,
     orgSuggestions,
     repoSuggestions,
     error,
     settingsIoNotice,
     settingsIoError,
     newWatchedOrg = $bindable(),
-    newExcludedRepo = $bindable(),
+    newRepoOverride = $bindable(),
     onBack,
     onIntervalChange,
     onNotifyChange,
@@ -96,11 +97,18 @@
     onStartCaptureShortcut,
     onAddWatchedOrg,
     onRemoveWatchedOrg,
-    onAddExcludedRepo,
-    onRemoveExcludedRepo,
+    onAddRepoOverride,
+    onRemoveRepoOverride,
+    onUpdateRepoOverride,
     onExportSettings,
     onImportSettings,
   }: Props = $props();
+
+  // Render override rows in deterministic order. Sort by repo name so a
+  // settings tweak doesn't reshuffle the list under the user's cursor.
+  const sortedRepoOverrides = $derived(
+    [...repoSettings.entries()].sort(([a], [b]) => a.localeCompare(b)),
+  );
 
   let sectionEl: HTMLElement | undefined;
   let backEl: HTMLButtonElement | undefined;
@@ -328,19 +336,52 @@
     </div>
 
     <div class="setting-section">
-      <span class="setting-label">Excluded repositories</span>
-      {#if excludedRepos.size === 0}
-        <p class="setting-hint">None. Items from all repos are shown.</p>
+      <span class="setting-label">Repository overrides</span>
+      {#if sortedRepoOverrides.length === 0}
+        <p class="setting-hint">
+          None. All repos respect the global Include toggles above. Add a
+          repo to flip PRs or Issues on/off just for that repo. Unchecking
+          both hides the repo entirely (replaces the old Excluded list).
+        </p>
       {:else}
-        <ul class="excluded-list">
-          {#each [...excludedRepos].sort() as repo (repo)}
-            <li>
-              <span class="excluded-repo">{repo}</span>
+        <p class="setting-hint">
+          Per-repo PR / Issue toggles. With the matching global toggle on
+          this just narrows; with the global toggle off, ticking the box
+          here brings that kind back in for this repo via an extra search.
+        </p>
+        <ul class="repo-overrides">
+          {#each sortedRepoOverrides as [repo, s] (repo)}
+            <li class="repo-override-row">
+              <span class="repo-override-name" title={repo}>{repo}</span>
+              <label class="repo-override-toggle" title="Show PRs">
+                <input
+                  type="checkbox"
+                  checked={s.prs}
+                  onchange={(e) =>
+                    onUpdateRepoOverride(repo, {
+                      prs: e.currentTarget.checked,
+                      issues: s.issues,
+                    })}
+                />
+                <span>PRs</span>
+              </label>
+              <label class="repo-override-toggle" title="Show Issues">
+                <input
+                  type="checkbox"
+                  checked={s.issues}
+                  onchange={(e) =>
+                    onUpdateRepoOverride(repo, {
+                      prs: s.prs,
+                      issues: e.currentTarget.checked,
+                    })}
+                />
+                <span>Issues</span>
+              </label>
               <button
                 class="row-action"
-                onclick={() => onRemoveExcludedRepo(repo)}
-                aria-label="Remove"
-                title="Remove"
+                onclick={() => onRemoveRepoOverride(repo)}
+                aria-label="Remove override"
+                title="Remove override (back to global defaults)"
               >
                 ×
               </button>
@@ -353,15 +394,15 @@
           type="text"
           list="repo-suggestions"
           placeholder="owner/repo"
-          bind:value={newExcludedRepo}
-          onkeydown={(e) => e.key === "Enter" && onAddExcludedRepo()}
+          bind:value={newRepoOverride}
+          onkeydown={(e) => e.key === "Enter" && onAddRepoOverride()}
         />
         <datalist id="repo-suggestions">
           {#each repoSuggestions as repo (repo)}
             <option value={repo}></option>
           {/each}
         </datalist>
-        <button class="secondary" onclick={onAddExcludedRepo}>Add</button>
+        <button class="secondary" onclick={onAddRepoOverride}>Add</button>
       </div>
     </div>
 
@@ -621,6 +662,52 @@
     background: var(--surface-1);
     color: inherit;
     min-width: 0;
+  }
+
+  .repo-overrides {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .repo-override-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 6px;
+    font-size: 12px;
+    border-radius: 5px;
+    background: var(--surface-1);
+  }
+
+  .repo-override-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .repo-override-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    cursor: pointer;
+    color: var(--fg-muted);
+  }
+
+  .repo-override-toggle input {
+    cursor: pointer;
+  }
+
+  .repo-override-row .row-action {
+    opacity: 0.6;
+  }
+
+  .repo-override-row:hover .row-action {
+    opacity: 1;
   }
 
   .shortcut-list {

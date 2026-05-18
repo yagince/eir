@@ -1,3 +1,4 @@
+import type { RepoSetting } from "./storage";
 import type { RepoGroup, Tab, WatchedItem } from "./types";
 
 export function relativeTime(iso: string, now: number = Date.now()): string {
@@ -39,11 +40,25 @@ export function flattenCommentBody(body: string): string {
   return kept.join(" ").split(/\s+/).filter(Boolean).join(" ");
 }
 
+/// True when this (repo, kind) is suppressed by a per-repo override. Items
+/// without an entry pass through unchanged — the global Include toggles
+/// decide whether they would even reach us.
+function suppressedByRepo(
+  item: WatchedItem,
+  repoSettings: ReadonlyMap<string, RepoSetting>,
+): boolean {
+  const s = repoSettings.get(item.repo);
+  if (!s) return false;
+  if (item.kind === "pr" && !s.prs) return true;
+  if (item.kind === "issue" && !s.issues) return true;
+  return false;
+}
+
 export function filterVisible(
   items: WatchedItem[],
   opts: {
     tab: Tab;
-    excludedRepos: ReadonlySet<string>;
+    repoSettings: ReadonlyMap<string, RepoSetting>;
     hiddenItems: ReadonlySet<number>;
   },
 ): WatchedItem[] {
@@ -51,7 +66,8 @@ export function filterVisible(
     return items.filter((i) => opts.hiddenItems.has(i.id));
   }
   return items.filter(
-    (i) => !opts.hiddenItems.has(i.id) && !opts.excludedRepos.has(i.repo),
+    (i) =>
+      !opts.hiddenItems.has(i.id) && !suppressedByRepo(i, opts.repoSettings),
   );
 }
 
@@ -164,11 +180,11 @@ export function groupByRepo(
 
 export function repoSuggestionsFrom(
   items: WatchedItem[],
-  excludedRepos: ReadonlySet<string>,
+  overriddenRepos: ReadonlySet<string>,
 ): string[] {
   const seen = new Set<string>();
   for (const item of items) {
-    if (!excludedRepos.has(item.repo)) seen.add(item.repo);
+    if (!overriddenRepos.has(item.repo)) seen.add(item.repo);
   }
   return [...seen].sort();
 }

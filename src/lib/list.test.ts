@@ -63,33 +63,51 @@ describe("itemKey", () => {
 
 describe("filterVisible", () => {
   const items = [
-    makeItem({ id: 1, repo: "a/a", number: 1 }),
-    makeItem({ id: 2, repo: "b/b", number: 2 }),
-    makeItem({ id: 3, repo: "c/c", number: 3 }),
+    makeItem({ id: 1, repo: "a/a", number: 1, kind: "pr" }),
+    makeItem({ id: 2, repo: "b/b", number: 2, kind: "pr" }),
+    makeItem({ id: 3, repo: "c/c", number: 3, kind: "pr" }),
   ];
 
   it("hides individually hidden items on non-hidden tabs", () => {
     const out = filterVisible(items, {
       tab: "all",
-      excludedRepos: new Set(),
+      repoSettings: new Map(),
       hiddenItems: new Set([2]),
     });
     expect(out.map((i) => i.id)).toEqual([1, 3]);
   });
 
-  it("hides items from excluded repos on non-hidden tabs", () => {
+  it("hides items from fully-overridden repos (prs:false, issues:false)", () => {
+    // The migration of the legacy excludedRepos lands as {prs:false,issues:false},
+    // which must still suppress everything from that repo regardless of kind.
     const out = filterVisible(items, {
       tab: "all",
-      excludedRepos: new Set(["c/c"]),
+      repoSettings: new Map([["c/c", { prs: false, issues: false }]]),
       hiddenItems: new Set(),
     });
     expect(out.map((i) => i.id)).toEqual([1, 2]);
   });
 
-  it("hidden tab shows only hidden items regardless of excluded repos", () => {
+  it("suppresses only the matching kind when override is partial", () => {
+    // c/c here has both a PR and an Issue with the same repo override
+    // (prs:false, issues:true) — the PR drops, the issue stays.
+    const mixed = [
+      makeItem({ id: 1, repo: "a/a", number: 1, kind: "pr" }),
+      makeItem({ id: 2, repo: "c/c", number: 2, kind: "pr" }),
+      makeItem({ id: 3, repo: "c/c", number: 3, kind: "issue" }),
+    ];
+    const out = filterVisible(mixed, {
+      tab: "all",
+      repoSettings: new Map([["c/c", { prs: false, issues: true }]]),
+      hiddenItems: new Set(),
+    });
+    expect(out.map((i) => i.id)).toEqual([1, 3]);
+  });
+
+  it("hidden tab shows only hidden items regardless of repo overrides", () => {
     const out = filterVisible(items, {
       tab: "hidden",
-      excludedRepos: new Set(["c/c"]),
+      repoSettings: new Map([["c/c", { prs: false, issues: false }]]),
       hiddenItems: new Set([3]),
     });
     expect(out.map((i) => i.id)).toEqual([3]);

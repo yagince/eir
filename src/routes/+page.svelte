@@ -16,7 +16,7 @@
     isEnabled as isAutostartEnabled,
   } from "@tauri-apps/plugin-autostart";
   import { onDestroy, onMount } from "svelte";
-  import { SvelteSet } from "svelte/reactivity";
+  import { SvelteMap, SvelteSet } from "svelte/reactivity";
   import {
     filterBySearch,
     filterVisible,
@@ -26,32 +26,35 @@
     repoSuggestionsFrom,
   } from "$lib/list";
   import {
-    loadExcludedRepos,
+    isValidRepoName,
     loadHiddenItems,
     loadIncludeIssues,
     loadIncludePRs,
     loadInterval,
     loadNotify,
     loadPinnedItems,
+    loadRepoSettings,
     loadShowLatestComment,
     loadTab,
     loadTheme,
     loadUnreadOnly,
     loadViewMode,
     loadWatchedOrgs,
-    persistExcludedRepos,
+    normalizeRepoSettingsInput,
     persistHiddenItems,
     persistIncludeIssues,
     persistIncludePRs,
     persistInterval,
     persistNotify,
     persistPinnedItems,
+    persistRepoSettings,
     persistShowLatestComment,
     persistTab,
     persistTheme,
     persistUnreadOnly,
     persistViewMode,
     persistWatchedOrgs,
+    type RepoSetting,
     type Theme,
   } from "$lib/storage";
   import type { NotificationItem, Tab, ViewMode, WatchedItem } from "$lib/types";
@@ -143,12 +146,18 @@
   let updateStatus = $state<UpdateStatus>({ kind: "idle" });
   let appVersion = $state<string>("");
   let autostartEnabled = $state<boolean | null>(null);
-  const excludedRepos = new SvelteSet<string>(loadExcludedRepos());
+  const repoSettings = new SvelteMap<string, RepoSetting>(
+    Object.entries(loadRepoSettings()),
+  );
   const hiddenItems = new SvelteSet<number>(loadHiddenItems());
   const pinnedItems = new SvelteSet<number>(loadPinnedItems());
   const watchedOrgs = new SvelteSet<string>(loadWatchedOrgs());
-  let newExcludedRepo = $state("");
+  let newRepoOverride = $state("");
   let newWatchedOrg = $state("");
+
+  function snapshotRepoSettings(): Record<string, RepoSetting> {
+    return Object.fromEntries(repoSettings.entries());
+  }
   let settingsIoError = $state<string | null>(null);
   let settingsIoNotice = $state<string | null>(null);
 
@@ -220,7 +229,7 @@
       intervalMs?: number;
       notifyEnabled?: boolean;
       watchedOrgs?: string[];
-      excludedRepos?: string[];
+      repoSettings?: Record<string, RepoSetting>;
       hiddenItems?: number[];
       includePRs?: boolean;
       includeIssues?: boolean;
@@ -232,7 +241,7 @@
         intervalMs: patch.intervalMs,
         notifyEnabled: patch.notifyEnabled,
         watchedOrgs: patch.watchedOrgs,
-        excludedRepos: patch.excludedRepos,
+        repoSettings: patch.repoSettings,
         hiddenItems: patch.hiddenItems,
         includePrs: patch.includePRs,
         includeIssues: patch.includeIssues,
@@ -246,7 +255,7 @@
       intervalMs: refreshMs,
       notifyEnabled,
       watchedOrgs: [...watchedOrgs],
-      excludedRepos: [...excludedRepos],
+      repoSettings: snapshotRepoSettings(),
       hiddenItems: [...hiddenItems],
       includePRs,
       includeIssues,
@@ -754,19 +763,35 @@
     persistPinnedItems(pinnedItems);
   }
 
-  function addExcludedRepo() {
-    const name = newExcludedRepo.trim();
-    if (!name || !name.includes("/")) return;
-    excludedRepos.add(name);
-    persistExcludedRepos(excludedRepos);
-    newExcludedRepo = "";
-    void pushBackgroundConfig({ excludedRepos: [...excludedRepos] });
+  function commitRepoSettings() {
+    const snap = snapshotRepoSettings();
+    persistRepoSettings(snap);
+    void pushBackgroundConfig({ repoSettings: snap });
   }
 
-  function removeExcludedRepo(repo: string) {
-    excludedRepos.delete(repo);
-    persistExcludedRepos(excludedRepos);
-    void pushBackgroundConfig({ excludedRepos: [...excludedRepos] });
+  function addRepoOverride() {
+    const name = newRepoOverride.trim();
+    if (!isValidRepoName(name) || repoSettings.has(name)) {
+      newRepoOverride = "";
+      return;
+    }
+    repoSettings.set(name, { prs: true, issues: false });
+    commitRepoSettings();
+    newRepoOverride = "";
+  }
+
+  function removeRepoOverride(repo: string) {
+    if (!repoSettings.delete(repo)) return;
+    commitRepoSettings();
+  }
+
+  function updateRepoOverride(repo: string, next: RepoSetting) {
+    if (next.prs && next.issues) {
+      removeRepoOverride(repo);
+      return;
+    }
+    repoSettings.set(repo, next);
+    commitRepoSettings();
   }
 
   async function addWatchedOrg() {
@@ -829,7 +854,10 @@
     includePRs?: boolean;
     includeIssues?: boolean;
     theme?: Theme;
+    /// Pre-per-repo builds wrote this string array; kept on the import side
+    /// so a re-import doesn't silently lose someone's exclusion list.
     excludedRepos?: string[];
+    repoSettings?: Record<string, RepoSetting>;
     watchedOrgs?: string[];
     hiddenItems?: number[];
     pinnedItems?: number[];
@@ -845,7 +873,9 @@
       includePRs,
       includeIssues,
       theme,
-      excludedRepos: [...excludedRepos].sort(),
+      repoSettings: Object.fromEntries(
+        [...repoSettings.entries()].sort(([a], [b]) => a.localeCompare(b)),
+      ),
       watchedOrgs: [...watchedOrgs].sort(),
       hiddenItems: [...hiddenItems].sort((a, b) => a - b),
       pinnedItems: [...pinnedItems].sort((a, b) => a - b),
@@ -965,14 +995,17 @@
       applied.push("theme");
     }
 
-    if (Array.isArray(data.excludedRepos)) {
-      const next = data.excludedRepos.filter(
-        (r): r is string => typeof r === "string" && r.includes("/"),
+    if (data.repoSettings !== undefined || data.excludedRepos !== undefined) {
+      const next = normalizeRepoSettingsInput(
+        data.repoSettings,
+        data.excludedRepos,
       );
-      excludedRepos.clear();
-      for (const r of next) excludedRepos.add(r);
-      persistExcludedRepos(excludedRepos);
-      applied.push("excluded repos");
+      repoSettings.clear();
+      for (const [repo, s] of Object.entries(next)) {
+        repoSettings.set(repo, s);
+      }
+      persistRepoSettings(snapshotRepoSettings());
+      applied.push("repo overrides");
     }
 
     if (Array.isArray(data.watchedOrgs)) {
@@ -1027,7 +1060,7 @@
   }
 
   const repoSuggestions = $derived(
-    repoSuggestionsFrom(items, excludedRepos),
+    repoSuggestionsFrom(items, new Set(repoSettings.keys())),
   );
 
   const orgSuggestions = $derived.by<string[]>(() => {
@@ -1045,7 +1078,7 @@
     const base = filterBySearch(
       filterVisible(items, {
         tab: activeTab,
-        excludedRepos,
+        repoSettings,
         hiddenItems,
       }),
       searchQuery,
@@ -1158,14 +1191,14 @@
       {shortcutError}
       {updateStatus}
       {watchedOrgs}
-      {excludedRepos}
+      {repoSettings}
       {orgSuggestions}
       {repoSuggestions}
       {error}
       {settingsIoNotice}
       {settingsIoError}
       bind:newWatchedOrg
-      bind:newExcludedRepo
+      bind:newRepoOverride
       onBack={() => (showingSettings = false)}
       {onIntervalChange}
       {onNotifyChange}
@@ -1180,8 +1213,9 @@
       onStartCaptureShortcut={startCaptureShortcut}
       onAddWatchedOrg={addWatchedOrg}
       onRemoveWatchedOrg={removeWatchedOrg}
-      onAddExcludedRepo={addExcludedRepo}
-      onRemoveExcludedRepo={removeExcludedRepo}
+      onAddRepoOverride={addRepoOverride}
+      onRemoveRepoOverride={removeRepoOverride}
+      onUpdateRepoOverride={updateRepoOverride}
       onExportSettings={exportSettings}
       onImportSettings={importSettings}
     />

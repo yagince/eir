@@ -75,12 +75,38 @@ pub struct BackgroundState {
 
     pub tab: Tab,
     pub watched_orgs: Vec<String>,
-    pub excluded_repos: HashSet<String>,
+    pub repo_settings: HashMap<String, RepoSetting>,
     pub hidden_items: HashSet<u64>,
     pub notify_enabled: bool,
     pub interval_ms: u64,
     pub include_prs: bool,
     pub include_issues: bool,
+}
+
+/// Per-repository override of which item kinds the user wants to see.
+/// `{prs: true, issues: true}` is the default and is never stored —
+/// repos without an override fall through to the global Include toggles.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+pub struct RepoSetting {
+    pub prs: bool,
+    pub issues: bool,
+}
+
+/// Decide whether an item should be hidden by its repo's override. Items
+/// from repos without an override are never suppressed here — the global
+/// Include toggles already narrowed the fetch.
+pub(crate) fn suppressed_by_repo(
+    item: &WatchedItem,
+    repo_settings: &HashMap<String, RepoSetting>,
+) -> bool {
+    let Some(s) = repo_settings.get(&item.repo) else {
+        return false;
+    };
+    match item.kind {
+        "pr" => !s.prs,
+        "issue" => !s.issues,
+        _ => false,
+    }
 }
 
 impl BackgroundState {
@@ -201,10 +227,9 @@ fn update_tray_badge(app: &AppHandle, handle: &BackgroundHandle) {
             .iter()
             .filter_map(|n| n.number.map(|num| item_key(&n.repo, n.kind, num)))
             .collect();
-        let visible = s
-            .items
-            .iter()
-            .filter(|i| !s.hidden_items.contains(&i.id) && !s.excluded_repos.contains(&i.repo));
+        let visible = s.items.iter().filter(|i| {
+            !s.hidden_items.contains(&i.id) && !suppressed_by_repo(i, &s.repo_settings)
+        });
         let mut count = 0u32;
         let mut has_unread = false;
         for i in visible {
@@ -381,6 +406,7 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
     let (
         tab,
         watched_orgs,
+        repo_settings,
         has_loaded_once,
         prev_items,
         prev_threads,
@@ -393,6 +419,7 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
         (
             s.tab,
             s.watched_orgs.clone(),
+            s.repo_settings.clone(),
             s.has_loaded_once,
             std::mem::take(&mut s.prev_items),
             std::mem::take(&mut s.prev_thread_updated_at),
@@ -427,6 +454,7 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
             &octo,
             tab.as_query_key(),
             &watched_orgs,
+            &repo_settings,
             include_prs,
             include_issues,
         ),
@@ -710,7 +738,7 @@ pub fn trigger_refresh(handle: tauri::State<'_, BackgroundHandle>) {
 pub struct BackgroundConfig {
     pub tab: Option<Tab>,
     pub watched_orgs: Option<Vec<String>>,
-    pub excluded_repos: Option<Vec<String>>,
+    pub repo_settings: Option<HashMap<String, RepoSetting>>,
     pub hidden_items: Option<Vec<u64>>,
     pub notify_enabled: Option<bool>,
     pub interval_ms: Option<u64>,
@@ -755,10 +783,24 @@ fn apply_background_config(s: &mut BackgroundState, config: BackgroundConfig) ->
             trigger = true;
         }
     }
-    if let Some(excluded) = config.excluded_repos {
-        let next: HashSet<String> = excluded.into_iter().collect();
-        if next != s.excluded_repos {
-            s.excluded_repos = next;
+    if let Some(next) = config.repo_settings {
+        // {prs:true, issues:true} entries are the implicit default and would
+        // otherwise force a generation bump on every round-trip through the UI.
+        let next: HashMap<String, RepoSetting> = next
+            .into_iter()
+            .filter(|(_, s)| !(s.prs && s.issues))
+            .collect();
+        if next != s.repo_settings {
+            // A widening override (global OFF + repo ON) changes the GraphQL
+            // query, not just the client-side filter — invalidate anchors and
+            // refetch. Pure narrowing changes pay this cost too; the savings
+            // weren't worth the extra book-keeping at human cadence.
+            s.repo_settings = next;
+            s.has_loaded_once = false;
+            s.prev_items.clear();
+            s.prev_thread_updated_at.clear();
+            s.config_generation = s.config_generation.wrapping_add(1);
+            trigger = true;
             badge_dirty = true;
         }
     }
@@ -1210,7 +1252,7 @@ mod apply_background_config_tests {
         BackgroundConfig {
             tab: Some(tab),
             watched_orgs: None,
-            excluded_repos: None,
+            repo_settings: None,
             hidden_items: None,
             notify_enabled: None,
             interval_ms: None,
@@ -1223,7 +1265,7 @@ mod apply_background_config_tests {
         BackgroundConfig {
             tab: None,
             watched_orgs: None,
-            excluded_repos: None,
+            repo_settings: None,
             hidden_items: None,
             notify_enabled: None,
             interval_ms: None,
@@ -1295,24 +1337,94 @@ mod apply_background_config_tests {
     }
 
     #[test]
-    fn excluded_repos_change_does_not_bump_generation() {
-        // excluded_repos is a frontend-side filter and doesn't change the
-        // worker's fetch — bumping generation here would needlessly throw
-        // away a perfectly valid diff anchor on every settings tweak.
+    fn repo_settings_change_bumps_generation_and_marks_badge_dirty() {
+        // A widening override changes the GraphQL query, so anchors are stale
+        // and the badge composition has shifted.
         let mut s = BackgroundState::new();
         seed_loaded_state(&mut s, Tab::All);
         let before = s.config_generation;
 
+        let mut next = HashMap::new();
+        next.insert(
+            "o/r".to_string(),
+            RepoSetting {
+                prs: true,
+                issues: false,
+            },
+        );
         let (trigger, badge_dirty) = apply_background_config(
             &mut s,
             BackgroundConfig {
-                excluded_repos: Some(vec!["o/r".into()]),
+                repo_settings: Some(next),
+                ..empty_config()
+            },
+        );
+
+        assert!(trigger);
+        assert!(badge_dirty);
+        assert_ne!(s.config_generation, before);
+        assert!(s.prev_items.is_empty());
+    }
+
+    #[test]
+    fn repo_settings_default_entries_are_pruned() {
+        // {prs:true, issues:true} is the implicit default and must not survive
+        // a round-trip — otherwise it would bump the generation for a no-op.
+        let mut s = BackgroundState::new();
+        seed_loaded_state(&mut s, Tab::All);
+        let before = s.config_generation;
+
+        let mut next = HashMap::new();
+        next.insert(
+            "o/r".to_string(),
+            RepoSetting {
+                prs: true,
+                issues: true,
+            },
+        );
+        let (trigger, _) = apply_background_config(
+            &mut s,
+            BackgroundConfig {
+                repo_settings: Some(next),
                 ..empty_config()
             },
         );
 
         assert!(!trigger);
-        assert!(badge_dirty);
+        assert_eq!(s.config_generation, before);
+        assert!(s.repo_settings.is_empty());
+    }
+
+    #[test]
+    fn repo_settings_no_op_does_not_bump_generation() {
+        let mut s = BackgroundState::new();
+        seed_loaded_state(&mut s, Tab::All);
+        s.repo_settings.insert(
+            "o/r".to_string(),
+            RepoSetting {
+                prs: false,
+                issues: true,
+            },
+        );
+        let before = s.config_generation;
+
+        let mut next = HashMap::new();
+        next.insert(
+            "o/r".to_string(),
+            RepoSetting {
+                prs: false,
+                issues: true,
+            },
+        );
+        let (trigger, _) = apply_background_config(
+            &mut s,
+            BackgroundConfig {
+                repo_settings: Some(next),
+                ..empty_config()
+            },
+        );
+
+        assert!(!trigger);
         assert_eq!(s.config_generation, before);
     }
 
