@@ -275,6 +275,9 @@
         {/if}
       </button>
     </div>
+    <p class="setting-hint update-hint">
+      Checked automatically once per hour while the app is running.
+    </p>
     <div class="setting-row">
       <span class="setting-label">Toggle popup shortcut</span>
       <button
@@ -563,6 +566,10 @@
     margin: 8px 0 0;
     font-size: 11px;
     color: var(--fg-muted);
+  }
+
+  .setting-hint.update-hint {
+    margin-top: -4px;
   }
 
   .shortcut-capture {

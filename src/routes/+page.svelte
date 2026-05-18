@@ -91,6 +91,9 @@
     { value: 120_000, label: "2 minutes" },
     { value: 300_000, label: "5 minutes" },
   ];
+  // Re-checked once an hour; skipped while an update is already queued or
+  // installing — see startUpdateCheckTimer.
+  const UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 
   let phase = $state<Phase>("bootstrapping");
   let deviceCode = $state<DeviceCode | null>(null);
@@ -165,6 +168,7 @@
   let unlistenStateUpdated: UnlistenFn | null = null;
   let systemThemeMedia: MediaQueryList | null = null;
   let systemThemeListener: ((e: MediaQueryListEvent) => void) | null = null;
+  let updateCheckTimer: ReturnType<typeof setInterval> | null = null;
 
   $effect(() => {
     const resolved =
@@ -337,6 +341,30 @@
     }
   }
 
+  function startUpdateCheckTimer() {
+    stopUpdateCheckTimer();
+    updateCheckTimer = setInterval(() => {
+      // Skip once an update is already on deck — re-checking would just
+      // re-fire the same notification and clobber the user's in-progress
+      // install state.
+      if (
+        updateStatus.kind === "available" ||
+        updateStatus.kind === "downloading" ||
+        updateStatus.kind === "installed"
+      ) {
+        return;
+      }
+      void runUpdateCheck({ interactive: false });
+    }, UPDATE_CHECK_INTERVAL_MS);
+  }
+
+  function stopUpdateCheckTimer() {
+    if (updateCheckTimer != null) {
+      clearInterval(updateCheckTimer);
+      updateCheckTimer = null;
+    }
+  }
+
   async function installPendingUpdate() {
     if (updateStatus.kind !== "available") return;
     const update = updateStatus.update;
@@ -422,6 +450,7 @@
     }
 
     void runUpdateCheck({ interactive: false });
+    startUpdateCheckTimer();
 
     // Kick the permission dialog early so the first real notification isn't
     // also the first time the OS is asked — which silently denies in some
@@ -452,6 +481,7 @@
     }
     systemThemeMedia = null;
     systemThemeListener = null;
+    stopUpdateCheckTimer();
   });
 
   function handleVisibilityChange() {
