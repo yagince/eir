@@ -510,6 +510,7 @@
     display: flex;
     flex-direction: column;
     overflow-y: auto;
+    padding-right: 8px;
   }
 
   .settings-header {
