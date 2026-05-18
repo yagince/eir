@@ -804,12 +804,19 @@
 
   async function switchTab(tab: Tab) {
     if (tab === activeTab) return;
+    const prevServerTab = serverTab(activeTab);
+    const nextServerTab = serverTab(tab);
     activeTab = tab;
     persistTab(tab);
-    // Clear locally so the old tab's items don't linger until the worker's
-    // emit arrives. The worker resets its diff anchors on tab change.
-    items = [];
-    await pushBackgroundConfig({ tab });
+    // Only clear + re-push when the worker's tab actually changes. `hidden`
+    // is a client-side filter that maps to `all` server-side, so e.g.
+    // `all → hidden` and `hidden → all` keep the same server tab — wiping
+    // `items` there would strand the UI on an empty list since the worker
+    // would see no tab diff and skip the re-emit.
+    if (prevServerTab !== nextServerTab) {
+      items = [];
+      await pushBackgroundConfig({ tab });
+    }
   }
 
   const SETTINGS_EXPORT_VERSION = 1;
