@@ -3,7 +3,11 @@ import type { Tab, ViewMode } from "$lib/types";
 export const TAB_KEY = "eir.tab";
 export const INTERVAL_KEY = "eir.refreshMs";
 export const NOTIFY_KEY = "eir.notifyEnabled";
+/// Legacy key — superseded by `eir.repoSettings`. Kept readable for one
+/// release so a user who downgrades doesn't lose their excluded list, but
+/// new code writes only to `eir.repoSettings`.
 export const EXCLUDED_REPOS_KEY = "eir.excludedRepos";
+export const REPO_SETTINGS_KEY = "eir.repoSettings";
 export const HIDDEN_ITEMS_KEY = "eir.hiddenItems";
 export const PINNED_ITEMS_KEY = "eir.pinnedItems";
 export const WATCHED_ORGS_KEY = "eir.watchedOrgs";
@@ -11,6 +15,8 @@ export const THEME_KEY = "eir.theme";
 export const UNREAD_ONLY_KEY = "eir.unreadOnly";
 export const SHOW_LATEST_COMMENT_KEY = "eir.showLatestComment";
 export const VIEW_MODE_KEY = "eir.viewMode";
+export const INCLUDE_PRS_KEY = "eir.includePRs";
+export const INCLUDE_ISSUES_KEY = "eir.includeIssues";
 
 export const DEFAULT_REFRESH_MS = 60_000;
 
@@ -61,17 +67,67 @@ export function persistTab(value: Tab): void {
   localStorage.setItem(TAB_KEY, value);
 }
 
-export function loadExcludedRepos(): string[] {
+export type RepoSetting = { prs: boolean; issues: boolean };
+
+export function isRepoSetting(value: unknown): value is RepoSetting {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    typeof (value as RepoSetting).prs === "boolean" &&
+    typeof (value as RepoSetting).issues === "boolean"
+  );
+}
+
+export function isValidRepoName(value: unknown): value is string {
+  return typeof value === "string" && value.includes("/");
+}
+
+/// Coerce arbitrary input into a clean repoSettings map. Accepts either
+/// the new shape (Record<repo, RepoSetting>) or the legacy excludedRepos
+/// shape (string[] of fully-hidden repos), so a load from localStorage
+/// and an import from a saved JSON file can share the same migration.
+export function normalizeRepoSettingsInput(
+  newShape: unknown,
+  legacyExcluded: unknown,
+): Record<string, RepoSetting> {
+  const out: Record<string, RepoSetting> = {};
+  if (newShape && typeof newShape === "object" && !Array.isArray(newShape)) {
+    for (const [repo, val] of Object.entries(
+      newShape as Record<string, unknown>,
+    )) {
+      if (isValidRepoName(repo) && isRepoSetting(val) && !(val.prs && val.issues)) {
+        out[repo] = { prs: val.prs, issues: val.issues };
+      }
+    }
+    return out;
+  }
+  if (Array.isArray(legacyExcluded)) {
+    for (const repo of legacyExcluded) {
+      if (isValidRepoName(repo)) {
+        out[repo] = { prs: false, issues: false };
+      }
+    }
+  }
+  return out;
+}
+
+export function loadRepoSettings(): Record<string, RepoSetting> {
   try {
-    const raw = localStorage.getItem(EXCLUDED_REPOS_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const raw = localStorage.getItem(REPO_SETTINGS_KEY);
+    const legacy = localStorage.getItem(EXCLUDED_REPOS_KEY);
+    return normalizeRepoSettingsInput(
+      raw ? JSON.parse(raw) : undefined,
+      legacy ? JSON.parse(legacy) : undefined,
+    );
   } catch {
-    return [];
+    return {};
   }
 }
 
-export function persistExcludedRepos(values: Iterable<string>): void {
-  localStorage.setItem(EXCLUDED_REPOS_KEY, JSON.stringify([...values]));
+export function persistRepoSettings(
+  settings: Record<string, RepoSetting>,
+): void {
+  localStorage.setItem(REPO_SETTINGS_KEY, JSON.stringify(settings));
 }
 
 export function loadHiddenItems(): number[] {
@@ -136,4 +192,20 @@ export function loadViewMode(): ViewMode {
 
 export function persistViewMode(value: ViewMode): void {
   localStorage.setItem(VIEW_MODE_KEY, value);
+}
+
+export function loadIncludePRs(): boolean {
+  return localStorage.getItem(INCLUDE_PRS_KEY) !== "0";
+}
+
+export function persistIncludePRs(enabled: boolean): void {
+  localStorage.setItem(INCLUDE_PRS_KEY, enabled ? "1" : "0");
+}
+
+export function loadIncludeIssues(): boolean {
+  return localStorage.getItem(INCLUDE_ISSUES_KEY) !== "0";
+}
+
+export function persistIncludeIssues(enabled: boolean): void {
+  localStorage.setItem(INCLUDE_ISSUES_KEY, enabled ? "1" : "0");
 }

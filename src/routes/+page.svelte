@@ -16,7 +16,7 @@
     isEnabled as isAutostartEnabled,
   } from "@tauri-apps/plugin-autostart";
   import { onDestroy, onMount } from "svelte";
-  import { SvelteSet } from "svelte/reactivity";
+  import { SvelteMap, SvelteSet } from "svelte/reactivity";
   import {
     filterBySearch,
     filterVisible,
@@ -26,28 +26,35 @@
     repoSuggestionsFrom,
   } from "$lib/list";
   import {
-    loadExcludedRepos,
+    isValidRepoName,
     loadHiddenItems,
+    loadIncludeIssues,
+    loadIncludePRs,
     loadInterval,
     loadNotify,
     loadPinnedItems,
+    loadRepoSettings,
     loadShowLatestComment,
     loadTab,
     loadTheme,
     loadUnreadOnly,
     loadViewMode,
     loadWatchedOrgs,
-    persistExcludedRepos,
+    normalizeRepoSettingsInput,
     persistHiddenItems,
+    persistIncludeIssues,
+    persistIncludePRs,
     persistInterval,
     persistNotify,
     persistPinnedItems,
+    persistRepoSettings,
     persistShowLatestComment,
     persistTab,
     persistTheme,
     persistUnreadOnly,
     persistViewMode,
     persistWatchedOrgs,
+    type RepoSetting,
     type Theme,
   } from "$lib/storage";
   import type { NotificationItem, Tab, ViewMode, WatchedItem } from "$lib/types";
@@ -96,6 +103,8 @@
   let refreshMs = $state<number>(loadInterval());
   let notifyEnabled = $state<boolean>(loadNotify());
   let showLatestComment = $state<boolean>(loadShowLatestComment());
+  let includePRs = $state<boolean>(loadIncludePRs());
+  let includeIssues = $state<boolean>(loadIncludeIssues());
   let theme = $state<Theme>(loadTheme());
   let systemDark = $state<boolean>(
     window.matchMedia("(prefers-color-scheme: dark)").matches,
@@ -137,12 +146,18 @@
   let updateStatus = $state<UpdateStatus>({ kind: "idle" });
   let appVersion = $state<string>("");
   let autostartEnabled = $state<boolean | null>(null);
-  const excludedRepos = new SvelteSet<string>(loadExcludedRepos());
+  const repoSettings = new SvelteMap<string, RepoSetting>(
+    Object.entries(loadRepoSettings()),
+  );
   const hiddenItems = new SvelteSet<number>(loadHiddenItems());
   const pinnedItems = new SvelteSet<number>(loadPinnedItems());
   const watchedOrgs = new SvelteSet<string>(loadWatchedOrgs());
-  let newExcludedRepo = $state("");
+  let newRepoOverride = $state("");
   let newWatchedOrg = $state("");
+
+  function snapshotRepoSettings(): Record<string, RepoSetting> {
+    return Object.fromEntries(repoSettings.entries());
+  }
   let settingsIoError = $state<string | null>(null);
   let settingsIoNotice = $state<string | null>(null);
 
@@ -214,8 +229,10 @@
       intervalMs?: number;
       notifyEnabled?: boolean;
       watchedOrgs?: string[];
-      excludedRepos?: string[];
+      repoSettings?: Record<string, RepoSetting>;
       hiddenItems?: number[];
+      includePRs?: boolean;
+      includeIssues?: boolean;
     } = {},
   ) {
     await invoke("set_background_config", {
@@ -224,8 +241,10 @@
         intervalMs: patch.intervalMs,
         notifyEnabled: patch.notifyEnabled,
         watchedOrgs: patch.watchedOrgs,
-        excludedRepos: patch.excludedRepos,
+        repoSettings: patch.repoSettings,
         hiddenItems: patch.hiddenItems,
+        includePrs: patch.includePRs,
+        includeIssues: patch.includeIssues,
       },
     }).catch((e) => console.warn("[eir] set_background_config failed:", e));
   }
@@ -236,8 +255,10 @@
       intervalMs: refreshMs,
       notifyEnabled,
       watchedOrgs: [...watchedOrgs],
-      excludedRepos: [...excludedRepos],
+      repoSettings: snapshotRepoSettings(),
       hiddenItems: [...hiddenItems],
+      includePRs,
+      includeIssues,
     });
   }
 
@@ -702,6 +723,25 @@
     persistShowLatestComment(enabled);
   }
 
+  async function onIncludePRsChange(enabled: boolean) {
+    // Guard against the disabled-checkbox case getting bypassed (keyboard /
+    // automation): turning both off would leave the worker with nothing to
+    // fetch and the list permanently empty.
+    if (!enabled && !includeIssues) return;
+    includePRs = enabled;
+    persistIncludePRs(enabled);
+    items = [];
+    await pushBackgroundConfig({ includePRs: enabled });
+  }
+
+  async function onIncludeIssuesChange(enabled: boolean) {
+    if (!enabled && !includePRs) return;
+    includeIssues = enabled;
+    persistIncludeIssues(enabled);
+    items = [];
+    await pushBackgroundConfig({ includeIssues: enabled });
+  }
+
   function hideItem(id: number) {
     hiddenItems.add(id);
     persistHiddenItems(hiddenItems);
@@ -723,19 +763,35 @@
     persistPinnedItems(pinnedItems);
   }
 
-  function addExcludedRepo() {
-    const name = newExcludedRepo.trim();
-    if (!name || !name.includes("/")) return;
-    excludedRepos.add(name);
-    persistExcludedRepos(excludedRepos);
-    newExcludedRepo = "";
-    void pushBackgroundConfig({ excludedRepos: [...excludedRepos] });
+  function commitRepoSettings() {
+    const snap = snapshotRepoSettings();
+    persistRepoSettings(snap);
+    void pushBackgroundConfig({ repoSettings: snap });
   }
 
-  function removeExcludedRepo(repo: string) {
-    excludedRepos.delete(repo);
-    persistExcludedRepos(excludedRepos);
-    void pushBackgroundConfig({ excludedRepos: [...excludedRepos] });
+  function addRepoOverride() {
+    const name = newRepoOverride.trim();
+    if (!isValidRepoName(name) || repoSettings.has(name)) {
+      newRepoOverride = "";
+      return;
+    }
+    repoSettings.set(name, { prs: true, issues: false });
+    commitRepoSettings();
+    newRepoOverride = "";
+  }
+
+  function removeRepoOverride(repo: string) {
+    if (!repoSettings.delete(repo)) return;
+    commitRepoSettings();
+  }
+
+  function updateRepoOverride(repo: string, next: RepoSetting) {
+    if (next.prs && next.issues) {
+      removeRepoOverride(repo);
+      return;
+    }
+    repoSettings.set(repo, next);
+    commitRepoSettings();
   }
 
   async function addWatchedOrg() {
@@ -773,12 +829,19 @@
 
   async function switchTab(tab: Tab) {
     if (tab === activeTab) return;
+    const prevServerTab = serverTab(activeTab);
+    const nextServerTab = serverTab(tab);
     activeTab = tab;
     persistTab(tab);
-    // Clear locally so the old tab's items don't linger until the worker's
-    // emit arrives. The worker resets its diff anchors on tab change.
-    items = [];
-    await pushBackgroundConfig({ tab });
+    // Only clear + re-push when the worker's tab actually changes. `hidden`
+    // is a client-side filter that maps to `all` server-side, so e.g.
+    // `all → hidden` and `hidden → all` keep the same server tab — wiping
+    // `items` there would strand the UI on an empty list since the worker
+    // would see no tab diff and skip the re-emit.
+    if (prevServerTab !== nextServerTab) {
+      items = [];
+      await pushBackgroundConfig({ tab });
+    }
   }
 
   const SETTINGS_EXPORT_VERSION = 1;
@@ -788,8 +851,13 @@
     refreshMs?: number;
     notifyEnabled?: boolean;
     showLatestComment?: boolean;
+    includePRs?: boolean;
+    includeIssues?: boolean;
     theme?: Theme;
+    /// Pre-per-repo builds wrote this string array; kept on the import side
+    /// so a re-import doesn't silently lose someone's exclusion list.
     excludedRepos?: string[];
+    repoSettings?: Record<string, RepoSetting>;
     watchedOrgs?: string[];
     hiddenItems?: number[];
     pinnedItems?: number[];
@@ -802,8 +870,12 @@
       refreshMs,
       notifyEnabled,
       showLatestComment,
+      includePRs,
+      includeIssues,
       theme,
-      excludedRepos: [...excludedRepos].sort(),
+      repoSettings: Object.fromEntries(
+        [...repoSettings.entries()].sort(([a], [b]) => a.localeCompare(b)),
+      ),
       watchedOrgs: [...watchedOrgs].sort(),
       hiddenItems: [...hiddenItems].sort((a, b) => a - b),
       pinnedItems: [...pinnedItems].sort((a, b) => a - b),
@@ -884,6 +956,36 @@
       applied.push("latest comment preview");
     }
 
+    // Apply include flags raw (skipping the both-off guard in the change
+    // handlers) so a valid export with both true / one true survives, and a
+    // (defensive) both-false case falls through to the next field rather than
+    // mutating state — pushFullConfig at the end re-syncs the worker either
+    // way.
+    const nextIncludePRs =
+      typeof data.includePRs === "boolean" ? data.includePRs : includePRs;
+    const nextIncludeIssues =
+      typeof data.includeIssues === "boolean"
+        ? data.includeIssues
+        : includeIssues;
+    if (nextIncludePRs || nextIncludeIssues) {
+      if (
+        typeof data.includePRs === "boolean" &&
+        data.includePRs !== includePRs
+      ) {
+        includePRs = data.includePRs;
+        persistIncludePRs(data.includePRs);
+        applied.push("include PRs");
+      }
+      if (
+        typeof data.includeIssues === "boolean" &&
+        data.includeIssues !== includeIssues
+      ) {
+        includeIssues = data.includeIssues;
+        persistIncludeIssues(data.includeIssues);
+        applied.push("include Issues");
+      }
+    }
+
     if (
       data.theme === "system" ||
       data.theme === "light" ||
@@ -893,14 +995,17 @@
       applied.push("theme");
     }
 
-    if (Array.isArray(data.excludedRepos)) {
-      const next = data.excludedRepos.filter(
-        (r): r is string => typeof r === "string" && r.includes("/"),
+    if (data.repoSettings !== undefined || data.excludedRepos !== undefined) {
+      const next = normalizeRepoSettingsInput(
+        data.repoSettings,
+        data.excludedRepos,
       );
-      excludedRepos.clear();
-      for (const r of next) excludedRepos.add(r);
-      persistExcludedRepos(excludedRepos);
-      applied.push("excluded repos");
+      repoSettings.clear();
+      for (const [repo, s] of Object.entries(next)) {
+        repoSettings.set(repo, s);
+      }
+      persistRepoSettings(snapshotRepoSettings());
+      applied.push("repo overrides");
     }
 
     if (Array.isArray(data.watchedOrgs)) {
@@ -955,7 +1060,7 @@
   }
 
   const repoSuggestions = $derived(
-    repoSuggestionsFrom(items, excludedRepos),
+    repoSuggestionsFrom(items, new Set(repoSettings.keys())),
   );
 
   const orgSuggestions = $derived.by<string[]>(() => {
@@ -973,7 +1078,7 @@
     const base = filterBySearch(
       filterVisible(items, {
         tab: activeTab,
-        excludedRepos,
+        repoSettings,
         hiddenItems,
       }),
       searchQuery,
@@ -1075,6 +1180,8 @@
       refreshOptions={REFRESH_OPTIONS}
       {notifyEnabled}
       {showLatestComment}
+      {includePRs}
+      {includeIssues}
       {theme}
       themeOptions={THEME_OPTIONS}
       {autostartEnabled}
@@ -1084,18 +1191,20 @@
       {shortcutError}
       {updateStatus}
       {watchedOrgs}
-      {excludedRepos}
+      {repoSettings}
       {orgSuggestions}
       {repoSuggestions}
       {error}
       {settingsIoNotice}
       {settingsIoError}
       bind:newWatchedOrg
-      bind:newExcludedRepo
+      bind:newRepoOverride
       onBack={() => (showingSettings = false)}
       {onIntervalChange}
       {onNotifyChange}
       {onShowLatestCommentChange}
+      {onIncludePRsChange}
+      {onIncludeIssuesChange}
       {onThemeChange}
       onToggleAutostart={toggleAutostart}
       onSendTestNotification={sendTestNotification}
@@ -1104,8 +1213,9 @@
       onStartCaptureShortcut={startCaptureShortcut}
       onAddWatchedOrg={addWatchedOrg}
       onRemoveWatchedOrg={removeWatchedOrg}
-      onAddExcludedRepo={addExcludedRepo}
-      onRemoveExcludedRepo={removeExcludedRepo}
+      onAddRepoOverride={addRepoOverride}
+      onRemoveRepoOverride={removeRepoOverride}
+      onUpdateRepoOverride={updateRepoOverride}
       onExportSettings={exportSettings}
       onImportSettings={importSettings}
     />
