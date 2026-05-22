@@ -812,10 +812,10 @@
   }
 
   function updateRepoOverride(repo: string, next: RepoSetting) {
-    if (next.prs && next.issues) {
-      removeRepoOverride(repo);
-      return;
-    }
+    // Keep the override even when both kinds are ticked. With a global Include
+    // toggle off, {prs:true, issues:true} widens both kinds back in for this
+    // repo; with both globals on it's a visible no-op the user asked to keep
+    // (use the × button to remove an override, not "check everything").
     repoSettings.set(repo, next);
     commitRepoSettings();
   }
