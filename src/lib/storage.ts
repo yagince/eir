@@ -95,7 +95,7 @@ export function normalizeRepoSettingsInput(
     for (const [repo, val] of Object.entries(
       newShape as Record<string, unknown>,
     )) {
-      if (isValidRepoName(repo) && isRepoSetting(val) && !(val.prs && val.issues)) {
+      if (isValidRepoName(repo) && isRepoSetting(val)) {
         out[repo] = { prs: val.prs, issues: val.issues };
       }
     }

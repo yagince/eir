@@ -84,8 +84,10 @@ pub struct BackgroundState {
 }
 
 /// Per-repository override of which item kinds the user wants to see.
-/// `{prs: true, issues: true}` is the default and is never stored —
-/// repos without an override fall through to the global Include toggles.
+/// All four combinations are stored, including `{prs: true, issues: true}`:
+/// with a global Include toggle off it widens that kind back in for this repo,
+/// and either way it keeps the override row visible in the UI. Repos without
+/// an override fall through to the global Include toggles.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 pub struct RepoSetting {
     pub prs: bool,
@@ -784,12 +786,10 @@ fn apply_background_config(s: &mut BackgroundState, config: BackgroundConfig) ->
         }
     }
     if let Some(next) = config.repo_settings {
-        // {prs:true, issues:true} entries are the implicit default and would
-        // otherwise force a generation bump on every round-trip through the UI.
-        let next: HashMap<String, RepoSetting> = next
-            .into_iter()
-            .filter(|(_, s)| !(s.prs && s.issues))
-            .collect();
+        // Every combination is kept, including {prs:true, issues:true}: with a
+        // global Include toggle off it widens that kind back in for the repo,
+        // and it keeps the override row visible in the UI. The map only changes
+        // on a genuine user edit, so this doesn't churn the generation.
         if next != s.repo_settings {
             // A widening override (global OFF + repo ON) changes the GraphQL
             // query, not just the client-side filter — invalidate anchors and
@@ -1367,12 +1367,12 @@ mod apply_background_config_tests {
     }
 
     #[test]
-    fn repo_settings_default_entries_are_pruned() {
-        // {prs:true, issues:true} is the implicit default and must not survive
-        // a round-trip — otherwise it would bump the generation for a no-op.
+    fn repo_settings_both_true_entries_are_kept() {
+        // {prs:true, issues:true} is a real override — with a global Include
+        // toggle off it widens both kinds back in for the repo, so it must
+        // survive a round-trip and stay visible rather than vanishing.
         let mut s = BackgroundState::new();
         seed_loaded_state(&mut s, Tab::All);
-        let before = s.config_generation;
 
         let mut next = HashMap::new();
         next.insert(
@@ -1390,9 +1390,14 @@ mod apply_background_config_tests {
             },
         );
 
-        assert!(!trigger);
-        assert_eq!(s.config_generation, before);
-        assert!(s.repo_settings.is_empty());
+        assert!(trigger);
+        assert_eq!(
+            s.repo_settings.get("o/r"),
+            Some(&RepoSetting {
+                prs: true,
+                issues: true,
+            })
+        );
     }
 
     #[test]
