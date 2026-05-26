@@ -4,6 +4,7 @@ mod diff;
 mod github;
 mod settings_io;
 mod shortcut;
+mod snooze;
 mod tray;
 mod updater;
 
@@ -64,6 +65,8 @@ pub fn run() {
             background::get_background_state,
             background::trigger_refresh,
             background::set_background_config,
+            background::snooze_item,
+            background::unsnooze_item,
             updater::relaunch_app,
         ])
         .setup(|app| {

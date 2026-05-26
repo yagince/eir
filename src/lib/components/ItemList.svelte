@@ -24,6 +24,17 @@
     unreadOnly: boolean;
     viewMode: ViewMode;
     showLatestComment: boolean;
+    /// Item-id → unix epoch seconds the snooze expires at. Sourced from the
+    /// Rust worker; the component only reads, mutations go through the
+    /// onSnoozeItem / onUnsnoozeItem callbacks below.
+    snoozedUntil: Record<number, number>;
+    /// Current wall-clock in unix seconds, refreshed by the host so the
+    /// countdown labels can re-render without each row owning a timer.
+    nowSec: number;
+    /// Item id whose Snooze menu should be open, owned by the host so a
+    /// keyboard shortcut on the page can open the menu for the currently-
+    /// selected row. Pass `null` to close.
+    snoozeMenuOpenId: number | null;
     onRefresh: () => void;
     onMarkAllVisibleAsRead: () => void;
     onShowSettings: () => void;
@@ -33,6 +44,8 @@
     onHideItem: (id: number) => void;
     onUnhideItem: (id: number) => void;
     onTogglePin: (id: number) => void;
+    onSnoozeItem: (id: number, untilSec: number) => void;
+    onUnsnoozeItem: (id: number) => void;
     onClearSearch: () => void;
     onCloseSearch: () => void;
     onToggleUnreadOnly: () => void;
@@ -55,6 +68,9 @@
     unreadOnly,
     viewMode,
     showLatestComment,
+    snoozedUntil,
+    nowSec,
+    snoozeMenuOpenId = $bindable(),
     onRefresh,
     onMarkAllVisibleAsRead,
     onShowSettings,
@@ -64,11 +80,243 @@
     onHideItem,
     onUnhideItem,
     onTogglePin,
+    onSnoozeItem,
+    onUnsnoozeItem,
     onClearSearch,
     onCloseSearch,
     onToggleUnreadOnly,
     onSetViewMode,
   }: Props = $props();
+
+  // `snoozeMenuOpenId` is bindable from the host so a keyboard shortcut
+  // can drive it. Custom-mode fields stay local since they're only
+  // meaningful while a menu is open; a $effect below resets them whenever
+  // the host closes the menu and seeds defaults when one opens.
+  let customMode = $state(false);
+  // Date stays as `<input type="date">` (browser handles locale fine).
+  // Time is split into two `<input type="number">` fields because macOS
+  // WebKit ignores the `lang` attribute on `<input type="time">` and
+  // always renders the locale's 12h/24h widget — so a US-locale user
+  // ends up with an "AM/PM" picker no matter what. Two number fields
+  // give us a deterministic 24h interface that doesn't depend on the
+  // user's OS settings.
+  let customDate = $state("");
+  let customHourStr = $state("");
+  let customMinuteStr = $state("");
+  let lastMenuId = $state<number | null>(null);
+  /// Reference to the currently-rendered Snooze menu so the focus-management
+  /// effect can query it for focusable children. Only one menu is open at a
+  /// time, so a single ref is enough.
+  let menuRef = $state<HTMLDivElement | null>(null);
+
+  $effect(() => {
+    if (snoozeMenuOpenId !== lastMenuId) {
+      if (snoozeMenuOpenId != null) {
+        customMode = false;
+        seedCustomDefaults();
+      } else {
+        customMode = false;
+        customDate = "";
+        customHourStr = "";
+        customMinuteStr = "";
+      }
+      lastMenuId = snoozeMenuOpenId ?? null;
+    }
+  });
+
+  /// Action that focuses the first usable child of the menu when it
+  /// mounts, and again when `customMode` flips. A `use:` action is more
+  /// reliable here than a `$effect`: actions fire after the node and its
+  /// children are fully attached to the DOM, whereas an effect that reads
+  /// `menuRef` may run before `bind:this` has wired it up, leaving the
+  /// `s` shortcut with no focus transfer.
+  function focusMenuFirst(node: HTMLDivElement, mode: boolean) {
+    let current = mode;
+    function focusInner() {
+      queueMicrotask(() => {
+        if (!node.isConnected) return;
+        const target = current
+          ? node.querySelector<HTMLElement>("input")
+          : node.querySelector<HTMLButtonElement>("button:not(:disabled)");
+        target?.focus();
+      });
+    }
+    focusInner();
+    return {
+      update(newMode: boolean) {
+        current = newMode;
+        focusInner();
+      },
+    };
+  }
+
+  /// Bubble-phase keydown handler on the menu container. Stops Enter and
+  /// arrow keys from reaching the page-level shortcut handler (which would
+  /// otherwise fire `openSelected` on Enter, or move the list selection on
+  /// arrows). Arrow keys walk between preset buttons; the native time/date
+  /// inputs handle their own arrow-key spinning.
+  function handleMenuKey(e: KeyboardEvent) {
+    if (e.key === "Enter") {
+      e.stopPropagation();
+      return;
+    }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.stopPropagation();
+      // Date/time inputs use arrows to change values; don't hijack.
+      if (e.target instanceof HTMLInputElement) return;
+      e.preventDefault();
+      moveMenuFocus(e.key === "ArrowDown" ? 1 : -1);
+    }
+  }
+
+  function moveMenuFocus(delta: 1 | -1) {
+    if (!menuRef) return;
+    const buttons = Array.from(
+      menuRef.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"),
+    );
+    if (buttons.length === 0) return;
+    const active = document.activeElement;
+    const idx =
+      active instanceof HTMLButtonElement ? buttons.indexOf(active) : -1;
+    const next =
+      idx === -1 ? 0 : (idx + delta + buttons.length) % buttons.length;
+    buttons[next].focus();
+  }
+
+  function closeSnoozeMenu() {
+    snoozeMenuOpenId = null;
+  }
+
+  function toggleSnoozeMenu(id: number) {
+    if (snoozeMenuOpenId === id) {
+      closeSnoozeMenu();
+    } else {
+      snoozeMenuOpenId = id;
+    }
+  }
+
+  /// Seed both pickers with "1 hour from now" so opening custom mode lets
+  /// the user nudge a sensible default rather than type from scratch.
+  function seedCustomDefaults() {
+    const d = new Date(Date.now() + 60 * 60 * 1000);
+    const pad = (n: number) => n.toString().padStart(2, "0");
+    customDate = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    customHourStr = pad(d.getHours());
+    customMinuteStr = pad(d.getMinutes());
+  }
+
+  /// Today's date as `YYYY-MM-DD`, used as the `min` on the date input so
+  /// the native picker greys out past calendar days.
+  function todayLocalIso(): string {
+    const d = new Date();
+    const pad = (n: number) => n.toString().padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
+
+  /// Combine date + hour + minute into unix seconds. Returns `null` for
+  /// blank, out-of-range, or already-past values so the apply button can
+  /// disable itself instead of silently no-opping on click. Hour and
+  /// minute come in as strings so an empty input doesn't coerce to
+  /// `NaN` mid-edit.
+  function customUntilSec(): number | null {
+    if (!customDate) return null;
+    if (!customHourStr || !customMinuteStr) return null;
+    const h = Number.parseInt(customHourStr, 10);
+    const m = Number.parseInt(customMinuteStr, 10);
+    if (!Number.isFinite(h) || h < 0 || h > 23) return null;
+    if (!Number.isFinite(m) || m < 0 || m > 59) return null;
+    const pad = (n: number) => n.toString().padStart(2, "0");
+    const t = new Date(`${customDate}T${pad(h)}:${pad(m)}`).getTime();
+    if (!Number.isFinite(t)) return null;
+    const sec = Math.floor(t / 1000);
+    if (sec <= Math.floor(Date.now() / 1000)) return null;
+    return sec;
+  }
+
+  /// Next occurrence of 8 AM local time, used by the "Tomorrow 8 AM" preset.
+  /// If it's currently before 8 AM the same calendar day's 8 AM wins; this
+  /// matches what users expect when snoozing late at night.
+  function nextMorningEightSec(): number {
+    const d = new Date();
+    const target = new Date(
+      d.getFullYear(),
+      d.getMonth(),
+      d.getDate(),
+      8,
+      0,
+      0,
+      0,
+    );
+    if (target.getTime() <= d.getTime()) {
+      target.setDate(target.getDate() + 1);
+    }
+    return Math.floor(target.getTime() / 1000);
+  }
+
+  function pickPreset(id: number, addSeconds: number) {
+    const target = Math.floor(Date.now() / 1000) + addSeconds;
+    onSnoozeItem(id, target);
+    closeSnoozeMenu();
+  }
+
+  function pickMorning(id: number) {
+    onSnoozeItem(id, nextMorningEightSec());
+    closeSnoozeMenu();
+  }
+
+  function applyCustom(id: number) {
+    const sec = customUntilSec();
+    if (sec == null) return;
+    onSnoozeItem(id, sec);
+    closeSnoozeMenu();
+  }
+
+  function clearSnooze(id: number) {
+    onUnsnoozeItem(id);
+    closeSnoozeMenu();
+  }
+
+  /// Short, human-friendly remaining-time label for a snoozed row. We round
+  /// down so a row labelled "1h 0m" doesn't disappear into the past while
+  /// reading; the actual expiry is the Rust worker's responsibility.
+  function snoozeLabel(untilSec: number, now: number): string {
+    const delta = Math.max(0, untilSec - now);
+    if (delta < 60) return `${delta}s`;
+    const minutes = Math.floor(delta / 60);
+    if (minutes < 60) return `${minutes}m`;
+    const hours = Math.floor(minutes / 60);
+    const remMinutes = minutes % 60;
+    if (hours < 24) {
+      return remMinutes > 0 ? `${hours}h ${remMinutes}m` : `${hours}h`;
+    }
+    const days = Math.floor(hours / 24);
+    const remHours = hours % 24;
+    return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
+  }
+
+  // Close the Snooze menu on Escape or a click outside its wrapper. Using a
+  // global listener keeps the menu lifecycle out of every row's hover state
+  // — opening one and clicking anywhere else just dismisses it.
+  $effect(() => {
+    if (snoozeMenuOpenId == null) return;
+    function onDocMouseDown(e: MouseEvent) {
+      const target = e.target as Element | null;
+      if (target?.closest(".snooze-wrap")) return;
+      closeSnoozeMenu();
+    }
+    function onDocKey(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        closeSnoozeMenu();
+        e.stopPropagation();
+      }
+    }
+    document.addEventListener("mousedown", onDocMouseDown);
+    document.addEventListener("keydown", onDocKey, true);
+    return () => {
+      document.removeEventListener("mousedown", onDocMouseDown);
+      document.removeEventListener("keydown", onDocKey, true);
+    };
+  });
 
   const VIEW_MODES: { id: ViewMode; label: string; title: string }[] = [
     { id: "grouped", label: "Repo", title: "Group by repository" },
@@ -287,6 +535,7 @@
                 class:unread={notificationsByKey.has(itemKey(item))}
                 class:selected={item.id === selectedId}
                 class:draft={item.is_draft}
+                class:snoozed={snoozedUntil[item.id] != null}
                 onclick={() => onOpenItem(item)}
               >
                 <span class="badge" class:pr={item.kind === "pr"}>
@@ -328,6 +577,19 @@
                         title="CI: {item.ci_status}"
                       >
                         {#if item.ci_status === "success"}✓{:else if item.ci_status === "failure" || item.ci_status === "error"}✗{:else}⏱{/if}
+                      </span>
+                    {/if}
+                    {#if snoozedUntil[item.id] != null}
+                      <span class="sep">·</span>
+                      <span
+                        class="snooze-chip"
+                        title={"Snoozed until " +
+                          new Date(snoozedUntil[item.id] * 1000).toLocaleString(
+                            undefined,
+                            { hour12: false },
+                          )}
+                      >
+                        💤 {snoozeLabel(snoozedUntil[item.id], nowSec)}
                       </span>
                     {/if}
                   </span>
@@ -428,6 +690,145 @@
                       />
                     </svg>
                   </button>
+                  <div class="snooze-wrap">
+                    <button
+                      class="row-action snooze-btn"
+                      class:active={snoozedUntil[item.id] != null}
+                      onclick={() => toggleSnoozeMenu(item.id)}
+                      title={snoozedUntil[item.id] != null ? "Edit snooze" : "Snooze"}
+                      aria-label={snoozedUntil[item.id] != null ? "Edit snooze" : "Snooze"}
+                      aria-haspopup="menu"
+                      aria-expanded={snoozeMenuOpenId === item.id}
+                    >
+                      <svg
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        aria-hidden="true"
+                      >
+                        <circle cx="12" cy="13" r="8" />
+                        <path d="M12 9v4l2.5 2" />
+                        <path d="M5 3 2 6" />
+                        <path d="m22 6-3-3" />
+                      </svg>
+                    </button>
+                    {#if snoozeMenuOpenId === item.id}
+                      <div
+                        bind:this={menuRef}
+                        use:focusMenuFirst={customMode}
+                        class="snooze-menu"
+                        class:custom={customMode}
+                        role="menu"
+                        aria-label="Snooze options"
+                        tabindex="-1"
+                        onkeydown={handleMenuKey}
+                      >
+                        {#if !customMode}
+                          <button
+                            class="snooze-option"
+                            role="menuitem"
+                            onclick={() => pickPreset(item.id, 30 * 60)}
+                          >
+                            30 minutes
+                          </button>
+                          <button
+                            class="snooze-option"
+                            role="menuitem"
+                            onclick={() => pickPreset(item.id, 60 * 60)}
+                          >
+                            1 hour
+                          </button>
+                          <button
+                            class="snooze-option"
+                            role="menuitem"
+                            onclick={() => pickMorning(item.id)}
+                          >
+                            Tomorrow 8 AM
+                          </button>
+                          <button
+                            class="snooze-option"
+                            role="menuitem"
+                            onclick={() => (customMode = true)}
+                          >
+                            Pick date &amp; time…
+                          </button>
+                          {#if snoozedUntil[item.id] != null}
+                            <button
+                              class="snooze-option danger"
+                              role="menuitem"
+                              onclick={() => clearSnooze(item.id)}
+                            >
+                              Clear snooze
+                            </button>
+                          {/if}
+                        {:else}
+                          <div class="snooze-custom-header">
+                            Wake at
+                          </div>
+                          <div class="snooze-custom-fields">
+                            <label class="snooze-custom-field">
+                              <span>Date</span>
+                              <input
+                                type="date"
+                                class="snooze-custom-input"
+                                min={todayLocalIso()}
+                                bind:value={customDate}
+                              />
+                            </label>
+                            <label class="snooze-custom-field">
+                              <span>Time (24h)</span>
+                              <div class="snooze-time-pair">
+                                <input
+                                  type="number"
+                                  class="snooze-custom-input snooze-time-input"
+                                  min="0"
+                                  max="23"
+                                  step="1"
+                                  inputmode="numeric"
+                                  aria-label="Hour"
+                                  bind:value={customHourStr}
+                                />
+                                <span class="snooze-time-sep">:</span>
+                                <input
+                                  type="number"
+                                  class="snooze-custom-input snooze-time-input"
+                                  min="0"
+                                  max="59"
+                                  step="1"
+                                  inputmode="numeric"
+                                  aria-label="Minute"
+                                  bind:value={customMinuteStr}
+                                />
+                              </div>
+                            </label>
+                          </div>
+                          {#if customUntilSec() == null && customDate && customHourStr && customMinuteStr}
+                            <div class="snooze-custom-error">
+                              Pick a future time.
+                            </div>
+                          {/if}
+                          <div class="snooze-custom-actions">
+                            <button
+                              class="snooze-option subtle"
+                              onclick={() => (customMode = false)}
+                            >
+                              Back
+                            </button>
+                            <button
+                              class="snooze-option primary"
+                              disabled={customUntilSec() == null}
+                              onclick={() => applyCustom(item.id)}
+                            >
+                              Snooze
+                            </button>
+                          </div>
+                        {/if}
+                      </div>
+                    {/if}
+                  </div>
                   <button
                     class="row-action"
                     onclick={() => onHideItem(item.id)}
@@ -1099,5 +1500,216 @@
     font-weight: 600;
     margin-right: 4px;
     opacity: 0.95;
+  }
+
+  /* Snoozed rows are still visible — just muted. The unread dot is already
+     suppressed via notificationsByKey on the host side, so all we need
+     here is to soften the text/badge so the eye skips past it until the
+     timer fires. */
+  .item.snoozed .title-text,
+  .item.snoozed .meta,
+  .item.snoozed .badge {
+    opacity: 0.55;
+  }
+
+  .snooze-chip {
+    flex-shrink: 0;
+    padding: 0 4px;
+    border-radius: 6px;
+    background: var(--neutral-bg);
+    color: var(--neutral);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Wrapper anchors the absolutely-positioned menu to the snooze button so
+     dropping it open in the rightmost column doesn't reflow the row. */
+  .snooze-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .snooze-btn svg {
+    width: 12px;
+    height: 12px;
+    display: block;
+  }
+
+  .snooze-btn.active {
+    visibility: visible;
+    pointer-events: auto;
+    color: var(--accent);
+  }
+
+  /* Menu hangs to the LEFT of the button so it doesn't run off the popup's
+     right edge. The popup window is fixed at 440px wide; a menu opening
+     rightward would be clipped. */
+  .snooze-menu {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
+    min-width: 160px;
+    padding: 4px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    background: var(--bg);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    z-index: 10;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  /* Custom mode opens the menu wider so the date/time picker controls
+     don't have to shrink — the native calendar dropdown that hangs off
+     `<input type="date">` is already as small as WebKit allows. */
+  .snooze-menu.custom {
+    min-width: 260px;
+    padding: 8px;
+    gap: 6px;
+  }
+
+  .snooze-option {
+    padding: 7px 10px;
+    font-size: 12px;
+    text-align: left;
+    background: none;
+    border: none;
+    border-radius: 4px;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .snooze-option:hover {
+    background: var(--hover-bg);
+  }
+
+  .snooze-option:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .snooze-option.danger {
+    color: var(--danger);
+    border-top: 1px solid var(--border-subtle);
+    margin-top: 2px;
+    padding-top: 6px;
+  }
+
+  .snooze-option.danger:hover {
+    background: var(--danger-bg);
+  }
+
+  .snooze-option.primary {
+    background: var(--accent-bg);
+    color: var(--accent);
+    font-weight: 600;
+    text-align: center;
+  }
+
+  .snooze-option.primary:hover:not(:disabled) {
+    background: var(--accent-bg-hover, var(--accent-bg));
+  }
+
+  .snooze-option.subtle {
+    color: var(--fg-muted);
+    text-align: center;
+  }
+
+  .snooze-custom-header {
+    padding: 2px 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--fg-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .snooze-custom-fields {
+    display: flex;
+    gap: 8px;
+  }
+
+  .snooze-custom-field {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--fg-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  /* Bigger than the preset rows: this is the field the user is actively
+     editing, and the native date/time controls render their internal
+     spin/picker chrome at the input's font-size, so undersized fields
+     make the popup widget tiny. */
+  .snooze-custom-input {
+    padding: 7px 8px;
+    font-size: 13px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    background: var(--surface-2);
+    color: inherit;
+    font-family: inherit;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .snooze-custom-input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+
+  /* Two-field 24h time picker. Each input is centred and roomy enough
+     for two digits; the separator is purely visual. Keyboard up/down on
+     a number input cycles its value, so we hide the native spinner
+     chrome (it's tiny and ugly on WebKit) to keep the boxes clean. */
+  .snooze-time-pair {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .snooze-time-input {
+    flex: 1;
+    min-width: 0;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    -moz-appearance: textfield;
+    appearance: textfield;
+  }
+
+  .snooze-time-input::-webkit-inner-spin-button,
+  .snooze-time-input::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  .snooze-time-sep {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--fg-muted);
+    flex-shrink: 0;
+  }
+
+  .snooze-custom-error {
+    padding: 2px 4px;
+    font-size: 11px;
+    color: var(--danger);
+  }
+
+  .snooze-custom-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 2px;
+  }
+
+  .snooze-custom-actions .snooze-option {
+    flex: 1;
   }
 </style>

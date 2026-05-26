@@ -480,6 +480,26 @@
           <dd><kbd>Enter</kbd></dd>
         </div>
         <div class="shortcut-item">
+          <dt>Snooze selected</dt>
+          <dd><kbd>S</kbd></dd>
+        </div>
+        <div class="shortcut-item">
+          <dt>Pin / unpin selected</dt>
+          <dd><kbd>P</kbd></dd>
+        </div>
+        <div class="shortcut-item">
+          <dt>Hide / unhide selected</dt>
+          <dd><kbd>H</kbd></dd>
+        </div>
+        <div class="shortcut-item">
+          <dt>Unread only</dt>
+          <dd><kbd>U</kbd></dd>
+        </div>
+        <div class="shortcut-item">
+          <dt>Toggle view (grouped / recent)</dt>
+          <dd><kbd>R</kbd></dd>
+        </div>
+        <div class="shortcut-item">
           <dt>Scroll</dt>
           <dd>
             <kbd>PageUp</kbd> <kbd>PageDown</kbd> <kbd>Home</kbd> <kbd>End</kbd>

@@ -112,6 +112,19 @@
     window.matchMedia("(prefers-color-scheme: dark)").matches,
   );
   let notifications = $state<NotificationItem[]>([]);
+  // Item-id → unix epoch seconds the snooze expires at. Mirrored from the
+  // Rust worker via `state-updated`; the frontend never writes to this map
+  // directly (use the `snooze_item` / `unsnooze_item` commands instead).
+  let snoozedUntil = $state<Record<number, number>>({});
+  // Wall-clock tick that drives countdown labels on snoozed rows. Updated
+  // every 30s — the labels round to the minute so anything tighter would
+  // just burn CPU without visibly changing.
+  let nowSec = $state<number>(Math.floor(Date.now() / 1000));
+  // The currently-open Snooze menu, owned here so the `s` shortcut can
+  // toggle it for the selected row. Also auto-clears below when the item
+  // disappears (closed/merged/filter change) so a stale id can't reopen
+  // the menu on a future row that happens to recycle the same id.
+  let snoozeMenuOpenId = $state<number | null>(null);
   let toggleShortcut = $state<string>("Ctrl+Shift+E");
   let capturingShortcut = $state(false);
   let shortcutError = $state<string | null>(null);
@@ -167,6 +180,7 @@
   let systemThemeMedia: MediaQueryList | null = null;
   let systemThemeListener: ((e: MediaQueryListEvent) => void) | null = null;
   let updateCheckTimer: ReturnType<typeof setInterval> | null = null;
+  let snoozeTickTimer: ReturnType<typeof setInterval> | null = null;
 
   $effect(() => {
     const resolved =
@@ -174,16 +188,41 @@
     document.documentElement.setAttribute("data-theme", resolved);
   });
 
+  // Close the Snooze menu if its target item is no longer in the list (the
+  // PR got merged/closed, the user switched tabs, etc). Without this an
+  // orphaned id could reopen the menu on a future row that happens to
+  // collide with it.
+  $effect(() => {
+    if (snoozeMenuOpenId == null) return;
+    if (!items.some((i) => i.id === snoozeMenuOpenId)) {
+      snoozeMenuOpenId = null;
+    }
+  });
+
   function onThemeChange(value: Theme) {
     theme = value;
     persistTheme(value);
   }
+
+  // Lookup item-id by item_key so notificationsByKey can omit threads whose
+  // matching list item is currently snoozed. The pairing is repo+kind+number
+  // → id, matching how the Rust side builds item_key.
+  const itemIdByKey = $derived.by(() => {
+    const m = new Map<string, number>();
+    for (const i of items) m.set(itemKey(i), i.id);
+    return m;
+  });
 
   const notificationsByKey = $derived.by(() => {
     const m = new Map<string, NotificationItem[]>();
     for (const n of notifications) {
       if (n.number == null) continue;
       const k = itemKey({ repo: n.repo, kind: n.kind, number: n.number });
+      // Snoozed items are treated as read until the timer fires — drop their
+      // notifications from the lookup so the unread dot, the per-repo
+      // counter, and the toolbar's "Mark all visible as read" all skip them.
+      const id = itemIdByKey.get(k);
+      if (id != null && snoozedUntil[id] != null) continue;
       const existing = m.get(k);
       if (existing) existing.push(n);
       else m.set(k, [n]);
@@ -197,12 +236,18 @@
     loading: boolean;
     last_error: string | null;
     authenticated: boolean;
+    /// Item-id → unix epoch seconds (the moment the snooze expires). The
+    /// worker is the single source of truth for snooze state — the frontend
+    /// just renders what arrives here and calls `snooze_item` /
+    /// `unsnooze_item` on user action.
+    snoozed: Record<number, number>;
   };
 
   function applyState(payload: StatePayload) {
     items = payload.items;
     notifications = payload.notifications;
     loading = payload.loading;
+    snoozedUntil = payload.snoozed ?? {};
     if (payload.authenticated) {
       // Don't knock the UI out of the device-flow "pending" phase; the
       // worker briefly emits authenticated=false while the token is being
@@ -447,6 +492,11 @@
 
     void runUpdateCheck({ interactive: false });
     startUpdateCheckTimer();
+    // Drive snooze countdown labels. The worker also fires the actual expiry
+    // notification on its own polling cadence, so this is purely cosmetic.
+    snoozeTickTimer = setInterval(() => {
+      nowSec = Math.floor(Date.now() / 1000);
+    }, 30_000);
 
     // Kick the permission dialog early so the first real notification isn't
     // also the first time the OS is asked — which silently denies in some
@@ -478,6 +528,10 @@
     systemThemeMedia = null;
     systemThemeListener = null;
     stopUpdateCheckTimer();
+    if (snoozeTickTimer != null) {
+      clearInterval(snoozeTickTimer);
+      snoozeTickTimer = null;
+    }
   });
 
   function handleVisibilityChange() {
@@ -562,6 +616,32 @@
       key: "r",
       when: inLoadedPage,
       run: toggleViewMode,
+    },
+    {
+      key: "s",
+      when: inLoadedPage,
+      run: () => {
+        if (selectedId == null) return;
+        // Toggle: pressing `s` again on the same row closes the menu.
+        snoozeMenuOpenId =
+          snoozeMenuOpenId === selectedId ? null : selectedId;
+      },
+    },
+    {
+      key: "p",
+      when: inLoadedPage,
+      run: () => {
+        if (selectedId != null) togglePin(selectedId);
+      },
+    },
+    {
+      key: "h",
+      when: inLoadedPage,
+      run: () => {
+        if (selectedId == null) return;
+        if (activeTab === "hidden") unhideItem(selectedId);
+        else hideItem(selectedId);
+      },
     },
   ];
 
@@ -787,6 +867,22 @@
       pinnedItems.add(id);
     }
     persistPinnedItems(pinnedItems);
+  }
+
+  async function snoozeItem(id: number, untilSec: number) {
+    try {
+      await invoke("snooze_item", { itemId: id, until: untilSec });
+    } catch (e) {
+      console.warn("[eir] snooze_item failed:", e);
+    }
+  }
+
+  async function unsnoozeItem(id: number) {
+    try {
+      await invoke("unsnooze_item", { itemId: id });
+    } catch (e) {
+      console.warn("[eir] unsnooze_item failed:", e);
+    }
   }
 
   function commitRepoSettings() {
@@ -1295,6 +1391,9 @@
       {unreadOnly}
       {viewMode}
       {showLatestComment}
+      {snoozedUntil}
+      {nowSec}
+      bind:snoozeMenuOpenId
       bind:searchQuery
       onRefresh={triggerRefresh}
       onMarkAllVisibleAsRead={markAllVisibleAsRead}
@@ -1305,6 +1404,8 @@
       onHideItem={hideItem}
       onUnhideItem={unhideItem}
       onTogglePin={togglePin}
+      onSnoozeItem={snoozeItem}
+      onUnsnoozeItem={unsnoozeItem}
       onClearSearch={clearSearch}
       onCloseSearch={closeSearch}
       onToggleUnreadOnly={toggleUnreadOnly}

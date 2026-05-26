@@ -14,6 +14,7 @@ use crate::github::{
     build_octocrab, fetch_item_states_with, fetch_notifications_with, fetch_watched_with, ItemRef,
     LatestComment, NotificationItem, WatchedItem,
 };
+use crate::snooze::{self, SnoozedMap};
 
 pub const STATE_UPDATED_EVENT: &str = "state-updated";
 
@@ -81,6 +82,13 @@ pub struct BackgroundState {
     pub interval_ms: u64,
     pub include_prs: bool,
     pub include_issues: bool,
+
+    /// Item id → unix-seconds expiry. A snoozed item stays in the list but
+    /// is treated as read: it doesn't contribute to the unread count and any
+    /// diff signal against it is suppressed. When `until <= now()` the entry
+    /// is dropped and the worker fires a "Snooze ended" notification so the
+    /// user gets pinged exactly once at the expected time.
+    pub snoozed: SnoozedMap,
 }
 
 /// Per-repository override of which item kinds the user wants to see.
@@ -118,6 +126,7 @@ impl BackgroundState {
             interval_ms: DEFAULT_INTERVAL_MS,
             include_prs: true,
             include_issues: true,
+            snoozed: snooze::load_active(),
             ..Default::default()
         }
     }
@@ -205,6 +214,10 @@ pub struct StatePayload {
     pub loading: bool,
     pub last_error: Option<String>,
     pub authenticated: bool,
+    /// Item-id → expiry as unix epoch seconds. The frontend converts to
+    /// `Date` via `new Date(until * 1000)` for display; storing seconds
+    /// rather than ms keeps it consistent with how it lands on disk.
+    pub snoozed: HashMap<u64, i64>,
 }
 
 fn snapshot_payload(state: &BackgroundState) -> StatePayload {
@@ -214,6 +227,7 @@ fn snapshot_payload(state: &BackgroundState) -> StatePayload {
         loading: state.loading,
         last_error: state.last_error.clone(),
         authenticated: state.authenticated,
+        snoozed: state.snoozed.clone(),
     }
 }
 
@@ -236,7 +250,14 @@ fn update_tray_badge(app: &AppHandle, handle: &BackgroundHandle) {
         let mut has_unread = false;
         for i in visible {
             count += 1;
-            if !has_unread && notified_keys.contains(&item_key(&i.repo, i.kind, i.number)) {
+            // Snoozed items count toward the visible total (the row is still
+            // there) but never toward "unread" — that's the whole point of
+            // snooze: take the badge dot off the tray icon until the timer
+            // fires.
+            if !has_unread
+                && !s.snoozed.contains_key(&i.id)
+                && notified_keys.contains(&item_key(&i.repo, i.kind, i.number))
+            {
                 has_unread = true;
             }
         }
@@ -405,6 +426,13 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
     // before any await so the state stays contended-free while fetching.
     // `generation` lets the write-back detect a tab/orgs change that landed
     // mid-cycle and discard stale anchors.
+    //
+    // Snooze housekeeping rides on the same lock acquisition: drain expired
+    // entries, persist the truncated map, and carry the expired IDs out so
+    // the post-fetch notification phase can fire "Snooze ended" for each.
+    // `snoozed_active` is the cloned map for the still-active entries —
+    // used downstream to suppress diff notifications for snoozed items.
+    let now = snooze::now_unix();
     let (
         tab,
         watched_orgs,
@@ -416,8 +444,12 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
         generation,
         include_prs,
         include_issues,
+        snoozed_active,
+        snooze_expired,
     ) = handle.with_state(|s| {
         s.loading = true;
+        let expired = snooze::drain_expired(&mut s.snoozed, now);
+        let snoozed_active = s.snoozed.clone();
         (
             s.tab,
             s.watched_orgs.clone(),
@@ -429,8 +461,13 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
             s.config_generation,
             s.include_prs,
             s.include_issues,
+            snoozed_active,
+            expired,
         )
     });
+    if !snooze_expired.is_empty() {
+        snooze::save(&snoozed_active);
+    }
     emit_state(app, handle);
 
     let octo = match build_octocrab(&token) {
@@ -539,10 +576,42 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
         .map(|i| (item_key(&i.repo, i.kind, i.number), i))
         .collect();
 
+    // Snoozed item keys for suppressing the fresh-thread notifications: the
+    // GitHub notification carries only (repo, kind, number), not the
+    // database id, so we materialise the keys of the currently-snoozed
+    // items here once.
+    let snoozed_keys: HashSet<String> = items
+        .iter()
+        .filter(|i| snoozed_active.contains_key(&i.id))
+        .map(|i| item_key(&i.repo, i.kind, i.number))
+        .collect();
+
+    // `Snooze ended` notifications fire even on the very first cycle after a
+    // restart: the user explicitly asked to be reminded at this time, so a
+    // boot that crosses the deadline must still ping them. The standard
+    // `has_loaded_once` gate (which guards against the first-cycle banner
+    // storm for fresh/item_changes/removed) is intentionally skipped here.
+    if notify_enabled {
+        for id in &snooze_expired {
+            let (title, body) = match items_by_key.values().find(|i| i.id == *id) {
+                Some(item) => (
+                    "Reminder".to_string(),
+                    format!("{}#{} — {}", item.repo, item.number, item.title),
+                ),
+                None => ("Reminder".to_string(), "Snoozed item is back".to_string()),
+            };
+            eprintln!("[eir] notify snooze-ended: id={id}");
+            send_os_notification(app, &title, &body);
+        }
+    }
+
     if has_loaded_once && notify_enabled {
         for n in &fresh {
             let Some(num) = n.number else { continue };
             let key = item_key(&n.repo, n.kind, num);
+            if snoozed_keys.contains(&key) {
+                continue;
+            }
             let title = build_title(&n.repo, n.kind, num, &n.title);
             // Only comment-driven reasons should render the latest-comment
             // body. CI / state / review-requested / assign reasons keep the
@@ -562,6 +631,9 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
             send_os_notification(app, &title, &body);
         }
         for ic in &item_changes {
+            if snoozed_active.contains_key(&ic.item.id) {
+                continue;
+            }
             let title = build_title(&ic.item.repo, ic.item.kind, ic.item.number, &ic.item.title);
             // Only `+N comment(s)` reasons should render the latest-comment
             // body. State transitions, CI changes, draft flips, reviewer
@@ -582,6 +654,13 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
             );
             send_os_notification(app, &title, &body);
         }
+        // A snoozed item that gets closed/merged would otherwise generate a
+        // `removed` ping — keep the snooze contract intact and silently drop
+        // those instead of pinging.
+        let removed: Vec<WatchedItem> = removed
+            .into_iter()
+            .filter(|i| !snoozed_active.contains_key(&i.id))
+            .collect();
         if !removed.is_empty() {
             let refs: Vec<ItemRef> = removed
                 .iter()
@@ -733,6 +812,41 @@ pub fn get_background_state(handle: tauri::State<'_, BackgroundHandle>) -> State
 #[tauri::command]
 pub fn trigger_refresh(handle: tauri::State<'_, BackgroundHandle>) {
     handle.trigger_refresh();
+}
+
+/// Snooze an item until `until` (unix epoch seconds). `until` in the past
+/// is rejected so a misformed picker can't accidentally re-fire the
+/// expiry notification on the very next cycle. The state-updated emit
+/// keeps the list UI in sync without a worker round-trip.
+#[tauri::command]
+pub fn snooze_item(
+    item_id: u64,
+    until: i64,
+    handle: tauri::State<'_, BackgroundHandle>,
+    app: AppHandle,
+) -> Result<(), String> {
+    if until <= snooze::now_unix() {
+        return Err("until must be in the future".into());
+    }
+    let snoozed_snapshot = handle.with_state(|s| {
+        s.snoozed.insert(item_id, until);
+        s.snoozed.clone()
+    });
+    snooze::save(&snoozed_snapshot);
+    emit_state(&app, &handle);
+    update_tray_badge(&app, &handle);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn unsnooze_item(item_id: u64, handle: tauri::State<'_, BackgroundHandle>, app: AppHandle) {
+    let snoozed_snapshot = handle.with_state(|s| {
+        s.snoozed.remove(&item_id);
+        s.snoozed.clone()
+    });
+    snooze::save(&snoozed_snapshot);
+    emit_state(&app, &handle);
+    update_tray_badge(&app, &handle);
 }
 
 #[derive(Deserialize)]
