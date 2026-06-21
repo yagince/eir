@@ -409,10 +409,12 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
     // Pull the current token off AppState. No token = sign-in required, and
     // we clear cached state without emitting the "loading" prelude because
     // there's nothing to load.
+    // `valid_access_token` refreshes proactively when the stored token is near
+    // expiry, so the fetch below goes out with a live token instead of tripping
+    // a 401 every few hours.
     let token = {
         let auth = app.state::<Mutex<AppState>>();
-        let guard = auth.lock().expect("AppState poisoned");
-        guard.token.clone()
+        crate::auth::valid_access_token(auth.inner()).await
     };
     let Some(token) = token else {
         handle.with_state(|s| s.reset_session(None));
@@ -525,11 +527,23 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
     )
     .await;
 
-    // 401 on either call → clear the persisted token and bail.
+    // 401 on either call → try one reactive refresh before giving up. The token
+    // may have lapsed between the proactive check and the fetch, or expiry info
+    // was absent. A successful refresh re-runs the cycle promptly with the new
+    // token; otherwise the refresh token itself is gone/expired, so we clear the
+    // persisted token and force re-auth.
     let unauthorized = matches!(&items_res, Err(e) if e.is_unauthorized)
         || matches!(&notifs_res, Err(e) if e.is_unauthorized);
     if unauthorized {
         let auth = app.state::<Mutex<AppState>>();
+        if crate::auth::refresh_after_unauthorized(auth.inner())
+            .await
+            .is_some()
+        {
+            handle.with_state(|s| s.loading = false);
+            handle.trigger_refresh();
+            return;
+        }
         clear_stored_token(&auth);
         handle.with_state(|s| s.reset_session(Some("not_authenticated".into())));
         emit_state(app, handle);
