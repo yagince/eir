@@ -529,8 +529,13 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
     let unauthorized = matches!(&items_res, Err(e) if e.is_unauthorized)
         || matches!(&notifs_res, Err(e) if e.is_unauthorized);
     if unauthorized {
+        let which = if matches!(&items_res, Err(e) if e.is_unauthorized) {
+            "fetch_watched"
+        } else {
+            "fetch_notifications"
+        };
         let auth = app.state::<Mutex<AppState>>();
-        clear_stored_token(&auth);
+        clear_stored_token(&auth, &format!("401 from background {which}"));
         handle.with_state(|s| s.reset_session(Some("not_authenticated".into())));
         emit_state(app, handle);
         update_tray_badge(app, handle);

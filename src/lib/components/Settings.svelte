@@ -23,6 +23,7 @@
     theme: Theme;
     themeOptions: { value: Theme; label: string }[];
     autostartEnabled: boolean | null;
+    diagnosticsEnabled: boolean;
     appVersion: string;
     toggleShortcut: string;
     capturingShortcut: boolean;
@@ -45,6 +46,7 @@
     onIncludeIssuesChange: (enabled: boolean) => void;
     onThemeChange: (value: Theme) => void;
     onToggleAutostart: (enabled: boolean) => void;
+    onDiagnosticsChange: (enabled: boolean) => void;
     onSendTestNotification: () => void;
     onRunUpdateCheck: () => void;
     onInstallUpdate: () => void;
@@ -68,6 +70,7 @@
     theme,
     themeOptions,
     autostartEnabled,
+    diagnosticsEnabled,
     appVersion,
     toggleShortcut,
     capturingShortcut,
@@ -90,6 +93,7 @@
     onIncludeIssuesChange,
     onThemeChange,
     onToggleAutostart,
+    onDiagnosticsChange,
     onSendTestNotification,
     onRunUpdateCheck,
     onInstallUpdate,
@@ -425,6 +429,24 @@
       {#if settingsIoError}
         <p class="error">{settingsIoError}</p>
       {/if}
+    </div>
+
+    <div class="setting-section">
+      <span class="setting-label">Troubleshooting</span>
+      <label class="setting-row">
+        <span class="setting-label">Auth diagnostics log</span>
+        <input
+          type="checkbox"
+          checked={diagnosticsEnabled}
+          onchange={(e) => onDiagnosticsChange(e.currentTarget.checked)}
+        />
+      </label>
+      <p class="setting-hint">
+        Off by default. When on, records token / sign-in events (no token
+        values) to <code>~/.config/eir/auth-diagnostics.log</code> so an
+        unexpected re-authentication can be traced. The log rotates so it stays
+        small. Turn this on if you keep getting signed out.
+      </p>
     </div>
 
     <div class="setting-section">

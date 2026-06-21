@@ -35,4 +35,7 @@ tauri-plugin-dialog = "2.7.0"
 # Tauri already pulls `image` in via the `image-png` feature, but we list it
 # explicitly so the direct API usage has its own version pin.
 image = { version = "0.25", default-features = false, features = ["png"] }
+# Human-readable UTC timestamps for the auth diagnostics log. Already in the
+# tree transitively (via octocrab); listed directly for the explicit usage.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 

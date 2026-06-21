@@ -80,6 +80,45 @@ mod token_store {
             let _ = std::fs::remove_file(p);
         }
     }
+
+    /// Non-sensitive snapshot of the token file for the diagnostics log: which
+    /// base env var resolved, the resolved path, and whether the file exists /
+    /// is non-empty. Never includes the token value itself.
+    pub fn diagnostic_probe() -> String {
+        #[cfg(not(windows))]
+        let (env_name, env_val) = ("HOME", std::env::var_os("HOME"));
+        #[cfg(windows)]
+        let (env_name, env_val) = ("APPDATA", std::env::var_os("APPDATA"));
+
+        let env_repr = match env_val {
+            Some(v) => v.to_string_lossy().into_owned(),
+            None => "<MISSING>".to_string(),
+        };
+        match path() {
+            None => format!("{env_name}={env_repr} path=<unresolved>"),
+            Some(p) => {
+                let (exists, bytes) = match std::fs::metadata(&p) {
+                    Ok(m) => (true, m.len()),
+                    Err(_) => (false, 0),
+                };
+                format!(
+                    "{env_name}={env_repr} path={} exists={exists} bytes={bytes}",
+                    p.display()
+                )
+            }
+        }
+    }
+}
+
+/// One-line summary of the token-store + in-memory auth state for diagnostics.
+/// `loaded_into_state` is the decisive bit: `exists=true` but
+/// `loaded_into_state=false` means the file was there but we failed to read it.
+pub fn token_probe(auth: &Mutex<AppState>) -> String {
+    let loaded = auth.lock().unwrap().token.is_some();
+    format!(
+        "{}; loaded_into_state={loaded}",
+        token_store::diagnostic_probe()
+    )
 }
 
 fn load_stored_token() -> Option<String> {
@@ -179,6 +218,7 @@ pub async fn poll_device_flow(
             TokenResponse::Success { access_token } => {
                 token_store::save(&access_token);
                 auth.lock().unwrap().token = Some(access_token);
+                crate::diagnostics::log("device-flow: token obtained and stored");
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                     let _ = window.set_focus();
@@ -199,7 +239,11 @@ pub async fn poll_device_flow(
     }
 }
 
-pub fn clear_stored_token(auth: &Mutex<AppState>) {
+/// Clear the persisted token and the in-memory copy. `reason` is recorded in
+/// the diagnostics log so a re-auth event can be traced back to its trigger
+/// (a 401 from a specific call vs. an explicit sign-out).
+pub fn clear_stored_token(auth: &Mutex<AppState>, reason: &str) {
+    crate::diagnostics::log(&format!("token cleared: {reason}"));
     auth.lock().unwrap().token = None;
     token_store::delete();
 }
@@ -210,7 +254,7 @@ pub fn sign_out(
     bg: State<'_, crate::background::BackgroundHandle>,
     app: tauri::AppHandle,
 ) {
-    clear_stored_token(&auth);
+    clear_stored_token(&auth, "sign_out (user action)");
     bg.clear_and_notify(&app);
 }
 

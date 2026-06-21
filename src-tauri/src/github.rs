@@ -840,7 +840,7 @@ pub async fn fetch_watched(
         Ok(items) => Ok(items),
         Err(err) => {
             if err.is_unauthorized {
-                clear_stored_token(&auth);
+                clear_stored_token(&auth, "401 from fetch_watched command");
                 return Err("not_authenticated".into());
             }
             Err(err.message)
@@ -1016,7 +1016,7 @@ pub async fn fetch_item_states(
         Ok(states) => Ok(states),
         Err(err) => {
             if err.is_unauthorized {
-                clear_stored_token(&auth);
+                clear_stored_token(&auth, "401 from fetch_item_states command");
                 return Err("not_authenticated".into());
             }
             Err(err.message)
@@ -1113,7 +1113,7 @@ pub async fn fetch_notifications(
         Ok(items) => Ok(items),
         Err(err) => {
             if err.is_unauthorized {
-                clear_stored_token(&auth);
+                clear_stored_token(&auth, "401 from fetch_notifications command");
                 return Err("not_authenticated".into());
             }
             Err(err.message)
@@ -1147,7 +1147,7 @@ pub async fn mark_notification_read(
         Err(err) => {
             let ge = GithubError::from_octocrab(err);
             if ge.is_unauthorized {
-                clear_stored_token(&auth);
+                clear_stored_token(&auth, "401 from mark_notification_read command");
                 return Err("not_authenticated".into());
             }
             Err(ge.message)
