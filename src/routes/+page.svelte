@@ -160,6 +160,7 @@
   let updateStatus = $state<UpdateStatus>({ kind: "idle" });
   let appVersion = $state<string>("");
   let autostartEnabled = $state<boolean | null>(null);
+  let diagnosticsEnabled = $state<boolean>(false);
   const repoSettings = new SvelteMap<string, RepoSetting>(
     Object.entries(loadRepoSettings()),
   );
@@ -334,6 +335,15 @@
     }
   }
 
+  async function onDiagnosticsChange(enabled: boolean) {
+    diagnosticsEnabled = enabled;
+    try {
+      await invoke("set_diagnostics_enabled", { enabled });
+    } catch (e) {
+      console.warn("[eir] set_diagnostics_enabled failed:", e);
+    }
+  }
+
   async function withPinnedWindow<T>(fn: () => Promise<T>): Promise<T> {
     // Pin the popup (so focus loss doesn't auto-hide it) AND drop always-on-top
     // so the native dialog can actually render above the popup instead of
@@ -501,7 +511,7 @@
     // Kick the permission dialog early so the first real notification isn't
     // also the first time the OS is asked — which silently denies in some
     // cases on macOS dev builds.
-    const [, shortcut, version, autostart] = await Promise.all([
+    const [, shortcut, version, autostart, diagnostics] = await Promise.all([
       ensureNotificationPermission().catch(() => false),
       invoke<string>("get_toggle_shortcut").catch(() => null),
       getVersion().catch(() => ""),
@@ -509,10 +519,12 @@
       // reads the LaunchAgent plist, so this catches changes made outside
       // the app (e.g. the user disabled "Login Items" in System Settings).
       isAutostartEnabled().catch(() => false),
+      invoke<boolean>("get_diagnostics_enabled").catch(() => false),
     ]);
     if (shortcut) toggleShortcut = shortcut;
     appVersion = version;
     autostartEnabled = autostart;
+    diagnosticsEnabled = diagnostics;
   });
 
   onDestroy(() => {
@@ -1307,6 +1319,7 @@
       {theme}
       themeOptions={THEME_OPTIONS}
       {autostartEnabled}
+      {diagnosticsEnabled}
       {appVersion}
       {toggleShortcut}
       {capturingShortcut}
@@ -1329,6 +1342,7 @@
       {onIncludeIssuesChange}
       {onThemeChange}
       onToggleAutostart={toggleAutostart}
+      {onDiagnosticsChange}
       onSendTestNotification={sendTestNotification}
       onRunUpdateCheck={() => runUpdateCheck({ interactive: true })}
       onInstallUpdate={installPendingUpdate}

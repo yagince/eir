@@ -1105,6 +1105,7 @@ dependencies = [
 name = "eir"
 version = "0.16.0"
 dependencies = [
+ "chrono",
  "image",
  "octocrab",
  "reqwest",

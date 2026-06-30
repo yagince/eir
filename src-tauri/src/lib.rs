@@ -1,5 +1,6 @@
 mod auth;
 mod background;
+mod diagnostics;
 mod diff;
 mod github;
 mod settings_io;
@@ -68,10 +69,24 @@ pub fn run() {
             background::snooze_item,
             background::unsnooze_item,
             updater::relaunch_app,
+            diagnostics::get_diagnostics_enabled,
+            diagnostics::set_diagnostics_enabled,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+            // Load the opt-in diagnostics flag, then record a startup snapshot
+            // of the token-store state. If the user has logging on, this single
+            // line distinguishes "token file missing / unreadable at launch"
+            // from "token present but later rejected" the next time the app
+            // bounces them to sign-in.
+            diagnostics::init();
+            diagnostics::log(&format!(
+                "startup: {}",
+                auth::token_probe(app.state::<Mutex<AppState>>().inner())
+            ));
+
             tray::setup(app)?;
             let stored = shortcut::load_shortcut_string();
             let parsed = shortcut::parse_shortcut(&stored)
