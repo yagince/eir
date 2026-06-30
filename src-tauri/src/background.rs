@@ -237,7 +237,8 @@ fn emit_state(app: &AppHandle, handle: &BackgroundHandle) {
 }
 
 fn update_tray_badge(app: &AppHandle, handle: &BackgroundHandle) {
-    let (count, has_unread) = handle.with_state(|s| {
+    let (count, has_unread, signed_out) = handle.with_state(|s| {
+        let signed_out = !s.authenticated;
         let notified_keys: HashSet<String> = s
             .notifications
             .iter()
@@ -261,9 +262,9 @@ fn update_tray_badge(app: &AppHandle, handle: &BackgroundHandle) {
                 has_unread = true;
             }
         }
-        (count, has_unread)
+        (count, has_unread, signed_out)
     });
-    crate::tray::set_tray_badge(count, has_unread, app.clone());
+    crate::tray::set_tray_badge(count, has_unread, signed_out, app.clone());
 }
 
 fn reason_label(reason: &str) -> &'static str {

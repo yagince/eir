@@ -29,11 +29,18 @@ const TRAY_ID: &str = "main";
 #[cfg(target_os = "macos")]
 static BADGE_ICON_BYTES: OnceLock<Vec<u8>> = OnceLock::new();
 
-// Caches (count, has_unread) as last pushed to the tray. `set_icon` in Tauri
-// v2 resets icon_as_template, and the re-apply is visible as a small flicker,
-// so we only touch the tray when something actually changed.
+// Signed-out variant: the whole silhouette recoloured to a warning amber and
+// rendered with template mode off so it shows amber on both light and dark
+// menubars. Surfaces "you've been signed out" at a glance — the plain template
+// icon looks identical whether you have zero items or no token at all.
 #[cfg(target_os = "macos")]
-static PREV_TRAY: OnceLock<Mutex<Option<(u32, bool)>>> = OnceLock::new();
+static SIGNED_OUT_ICON_BYTES: OnceLock<Vec<u8>> = OnceLock::new();
+
+// Caches (count, has_unread, signed_out) as last pushed to the tray. `set_icon`
+// in Tauri v2 resets icon_as_template, and the re-apply is visible as a small
+// flicker, so we only touch the tray when something actually changed.
+#[cfg(target_os = "macos")]
+static PREV_TRAY: OnceLock<Mutex<Option<(u32, bool, bool)>>> = OnceLock::new();
 
 /// Overlay a red filled circle in the upper-right corner of the base PNG
 /// and re-encode. Used only on macOS: paired with `set_icon_as_template(false)`
@@ -66,8 +73,28 @@ fn render_badged_icon_png(base_bytes: &[u8]) -> image::ImageResult<Vec<u8>> {
     Ok(buf)
 }
 
+/// Recolour every non-transparent pixel of the base PNG to `rgb`, preserving
+/// alpha, and re-encode. Used for the signed-out icon (template mode off so the
+/// colour survives the menubar's tinting).
+#[cfg(target_os = "macos")]
+fn render_recolored_icon_png(base_bytes: &[u8], rgb: [u8; 3]) -> image::ImageResult<Vec<u8>> {
+    let mut img = image::load_from_memory(base_bytes)?.to_rgba8();
+    for px in img.pixels_mut() {
+        if px.0[3] > 0 {
+            px.0[0] = rgb[0];
+            px.0[1] = rgb[1];
+            px.0[2] = rgb[2];
+        }
+    }
+    let mut buf = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)?;
+    Ok(buf)
+}
+
+/// `signed_out` takes priority over the unread/count display: when the token is
+/// gone the tray shows the amber icon + "Sign in" regardless of any stale count.
 #[tauri::command]
-pub fn set_tray_badge(count: u32, has_unread: bool, app: tauri::AppHandle) {
+pub fn set_tray_badge(count: u32, has_unread: bool, signed_out: bool, app: tauri::AppHandle) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return;
     };
@@ -78,28 +105,36 @@ pub fn set_tray_badge(count: u32, has_unread: bool, app: tauri::AppHandle) {
     {
         let prev = PREV_TRAY.get_or_init(|| Mutex::new(None));
         let mut prev_guard = prev.lock().expect("PREV_TRAY poisoned");
-        let next = (count, has_unread);
+        let next = (count, has_unread, signed_out);
         if *prev_guard == Some(next) {
             return;
         }
-        let prev_unread = prev_guard.map(|(_, u)| u);
+        // The icon variant only depends on (has_unread, signed_out); skip the
+        // set_icon flicker when just the count changed.
+        let prev_variant = prev_guard.map(|(_, u, s)| (u, s));
 
-        let title = if count == 0 {
+        let title = if signed_out {
+            Some(" Sign in".to_string())
+        } else if count == 0 {
             None
         } else {
             Some(format!(" {count}"))
         };
-        eprintln!("[eir] set_tray_badge count={count} has_unread={has_unread} title={title:?}");
+        eprintln!(
+            "[eir] set_tray_badge count={count} has_unread={has_unread} signed_out={signed_out} title={title:?}"
+        );
         let _ = tray.set_title(title);
 
-        if prev_unread != Some(has_unread) {
+        if prev_variant != Some((has_unread, signed_out)) {
             // Order matters: set_icon resets icon_as_template in Tauri v2
             // (see tauri-apps/tauri#6527), so re-apply the template flag
-            // after swapping the icon.
-            let icon_bytes: Option<&[u8]> = if has_unread {
-                BADGE_ICON_BYTES.get().map(Vec::as_slice)
+            // after swapping the icon. signed_out > unread > normal.
+            let (icon_bytes, as_template): (Option<&[u8]>, bool) = if signed_out {
+                (SIGNED_OUT_ICON_BYTES.get().map(Vec::as_slice), false)
+            } else if has_unread {
+                (BADGE_ICON_BYTES.get().map(Vec::as_slice), false)
             } else {
-                Some(TRAY_ICON_BYTES)
+                (Some(TRAY_ICON_BYTES), true)
             };
             if let Some(bytes) = icon_bytes {
                 match Image::from_bytes(bytes) {
@@ -109,17 +144,19 @@ pub fn set_tray_badge(count: u32, has_unread: bool, app: tauri::AppHandle) {
                     Err(err) => eprintln!("[eir] tray icon decode failed: {err}"),
                 }
             }
-            let _ = tray.set_icon_as_template(!has_unread);
+            let _ = tray.set_icon_as_template(as_template);
         }
 
         *prev_guard = Some(next);
     }
 
     // Windows / Linux: no adjacent-text slot on the tray icon, so surface the
-    // count + unread state through the hover tooltip instead.
+    // count + unread / signed-out state through the hover tooltip instead.
     #[cfg(not(target_os = "macos"))]
     {
-        let tooltip = if count == 0 {
+        let tooltip = if signed_out {
+            "eir — signed out · click to sign in".to_string()
+        } else if count == 0 {
             "eir".to_string()
         } else if has_unread {
             format!("eir — {count} (unread)")
@@ -306,6 +343,13 @@ pub fn setup(app: &App) -> tauri::Result<()> {
                 TRAY_ICON_BYTES.to_vec()
             },
         ));
+        // Warning amber (#F58A1F) recolour for the signed-out state.
+        let _ = SIGNED_OUT_ICON_BYTES.set(
+            render_recolored_icon_png(TRAY_ICON_BYTES, [0xF5, 0x8A, 0x1F]).unwrap_or_else(|err| {
+                eprintln!("[eir] signed-out icon render failed: {err}");
+                TRAY_ICON_BYTES.to_vec()
+            }),
+        );
     }
 
     let tray_icon = Image::from_bytes(TRAY_ICON_BYTES)?;
