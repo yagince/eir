@@ -8,11 +8,11 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
 use tokio::sync::Notify;
 
-use crate::auth::{clear_stored_token, AppState};
+use crate::auth::AppState;
 use crate::diff::{compute_item_changes, fresh_notifications, item_key, removed_items};
 use crate::github::{
-    build_octocrab, fetch_item_states_with, fetch_notifications_with, fetch_watched_with, ItemRef,
-    LatestComment, NotificationItem, WatchedItem,
+    build_octocrab, clear_token_if_dead, fetch_item_states_with, fetch_notifications_with,
+    fetch_watched_with, GithubError, ItemRef, LatestComment, NotificationItem, WatchedItem,
 };
 use crate::snooze::{self, SnoozedMap};
 
@@ -526,7 +526,11 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
     )
     .await;
 
-    // 401 on either call → clear the persisted token and bail.
+    // 401 on either call → re-verify the token before treating it as dead.
+    // GitHub has returned transient 401s here (2026-07-13: notifications
+    // 401'd while the search call in the same cycle succeeded), and clearing
+    // on a single one signs the user out spuriously. Both outcomes are logged
+    // so the diagnostics log shows whether the 401 hit one call or both.
     let unauthorized = matches!(&items_res, Err(e) if e.is_unauthorized)
         || matches!(&notifs_res, Err(e) if e.is_unauthorized);
     if unauthorized {
@@ -535,12 +539,24 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
         } else {
             "fetch_notifications"
         };
+        crate::diagnostics::log(&format!(
+            "401 in background cycle: fetch_watched={} fetch_notifications={}",
+            fetch_outcome(&items_res),
+            fetch_outcome(&notifs_res),
+        ));
         let auth = app.state::<Mutex<AppState>>();
-        clear_stored_token(&auth, &format!("401 from background {which}"));
-        handle.with_state(|s| s.reset_session(Some("not_authenticated".into())));
-        emit_state(app, handle);
-        update_tray_badge(app, handle);
-        return;
+        if clear_token_if_dead(&auth, &octo, &format!("background {which}")).await {
+            handle.with_state(|s| s.reset_session(Some("not_authenticated".into())));
+            emit_state(app, handle);
+            update_tray_badge(app, handle);
+            return;
+        }
+        let message = match (&items_res, &notifs_res) {
+            (Err(e), _) if e.is_unauthorized => e.message.clone(),
+            (_, Err(e)) => e.message.clone(),
+            _ => "unauthorized".into(),
+        };
+        return fail_cycle(app, handle, message);
     }
 
     let items = match items_res {
@@ -771,6 +787,45 @@ where
         items_res.expect("items future awaited"),
         notifs_res.expect("notifications future awaited"),
     )
+}
+
+/// One-word-ish summary of a fetch result for the auth diagnostics log, so a
+/// 401 line records whether the sibling call in the same cycle also failed.
+fn fetch_outcome<T>(res: &Result<T, GithubError>) -> String {
+    match res {
+        Ok(_) => "ok".into(),
+        Err(e) if e.is_unauthorized => "401".into(),
+        Err(e) => format!("err({})", e.message.chars().take(200).collect::<String>()),
+    }
+}
+
+#[cfg(test)]
+mod fetch_outcome_tests {
+    use super::*;
+
+    fn unauthorized() -> GithubError {
+        GithubError {
+            message: "GitHub: Bad credentials".into(),
+            is_unauthorized: true,
+        }
+    }
+
+    #[test]
+    fn summarizes_ok_401_and_other_errors() {
+        assert_eq!(fetch_outcome(&Ok(())), "ok");
+        assert_eq!(fetch_outcome::<()>(&Err(unauthorized())), "401");
+        assert_eq!(
+            fetch_outcome::<()>(&Err(GithubError::other("boom"))),
+            "err(boom)"
+        );
+    }
+
+    #[test]
+    fn truncates_long_error_messages() {
+        let long = "x".repeat(500);
+        let out = fetch_outcome::<()>(&Err(GithubError::other(long)));
+        assert_eq!(out.len(), "err()".len() + 200);
+    }
 }
 
 fn fail_cycle(app: &AppHandle, handle: &BackgroundHandle, message: String) {
