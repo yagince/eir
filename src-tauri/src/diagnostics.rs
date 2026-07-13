@@ -82,6 +82,8 @@ pub fn set_enabled(enabled: bool) {
 }
 
 /// Append a timestamped event line. No-op unless diagnostics are enabled.
+/// Events may embed upstream error messages, so newlines are flattened to
+/// keep the one-event-per-line format parseable.
 pub fn log(event: &str) {
     if !is_enabled() {
         return;
@@ -97,8 +99,12 @@ pub fn log(event: &str) {
         .open(&path)
     {
         let ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ");
-        let _ = writeln!(file, "{ts}\t{event}");
+        let _ = writeln!(file, "{ts}\t{}", flatten_to_one_line(event));
     }
+}
+
+fn flatten_to_one_line(event: &str) -> String {
+    event.replace(['\n', '\r'], " ")
 }
 
 /// Rotate the active log to `*.log.1` once it grows past the cap, keeping a
@@ -131,6 +137,14 @@ pub fn set_diagnostics_enabled(enabled: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flatten_replaces_newlines_so_events_stay_one_line() {
+        assert_eq!(
+            flatten_to_one_line("graphql error:\r\nline two\nline three"),
+            "graphql error:  line two line three"
+        );
+    }
 
     #[test]
     fn rotation_renames_when_over_cap_and_keeps_single_backup() {

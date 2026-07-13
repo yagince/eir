@@ -36,6 +36,62 @@ impl GithubError {
     }
 }
 
+/// Outcome of re-checking the stored token after some call returned 401.
+enum TokenCheck {
+    Valid,
+    Unauthorized,
+    Inconclusive(String),
+}
+
+/// `GET /user` with the same client that just got the 401 — the cheapest
+/// authenticated call there is; its verdict decides whether the 401 was real.
+async fn verify_token(octo: &octocrab::Octocrab) -> TokenCheck {
+    match octo.current().user().await {
+        Ok(_) => TokenCheck::Valid,
+        Err(err) => {
+            let ge = GithubError::from_octocrab(err);
+            if ge.is_unauthorized {
+                TokenCheck::Unauthorized
+            } else {
+                TokenCheck::Inconclusive(ge.message)
+            }
+        }
+    }
+}
+
+/// A call returned 401. GitHub has been observed to return a transient 401
+/// for a token that is still valid (2026-07-13: the notifications endpoint
+/// 401'd while the search call in the same cycle succeeded), so a single 401
+/// is not proof the credential is dead. Re-verify with `GET /user` and clear
+/// the persisted token only when that confirms it; on a transient or
+/// inconclusive verdict the token is kept and the caller should surface an
+/// ordinary error so the next cycle retries. Returns whether the token was
+/// cleared. Every path logs its verdict to the auth diagnostics log.
+pub async fn clear_token_if_dead(
+    auth: &Mutex<AppState>,
+    octo: &octocrab::Octocrab,
+    context: &str,
+) -> bool {
+    match verify_token(octo).await {
+        TokenCheck::Unauthorized => {
+            clear_stored_token(auth, &format!("401 from {context}, confirmed by GET /user"));
+            true
+        }
+        TokenCheck::Valid => {
+            crate::diagnostics::log(&format!(
+                "401 from {context} but GET /user succeeded; treating as transient, token kept"
+            ));
+            false
+        }
+        TokenCheck::Inconclusive(msg) => {
+            crate::diagnostics::log(&format!(
+                "401 from {context}, GET /user inconclusive ({msg}); token kept"
+            ));
+            false
+        }
+    }
+}
+
 pub fn build_octocrab(token: &str) -> Result<octocrab::Octocrab, String> {
     octocrab::OctocrabBuilder::new()
         .personal_token(token.to_string())
@@ -839,8 +895,9 @@ pub async fn fetch_watched(
     match fetch_watched_with(&octo, &tab, &orgs, &settings, prs, issues).await {
         Ok(items) => Ok(items),
         Err(err) => {
-            if err.is_unauthorized {
-                clear_stored_token(&auth, "401 from fetch_watched command");
+            if err.is_unauthorized
+                && clear_token_if_dead(&auth, &octo, "fetch_watched command").await
+            {
                 return Err("not_authenticated".into());
             }
             Err(err.message)
@@ -1015,8 +1072,9 @@ pub async fn fetch_item_states(
     match fetch_item_states_with(&octo, &items).await {
         Ok(states) => Ok(states),
         Err(err) => {
-            if err.is_unauthorized {
-                clear_stored_token(&auth, "401 from fetch_item_states command");
+            if err.is_unauthorized
+                && clear_token_if_dead(&auth, &octo, "fetch_item_states command").await
+            {
                 return Err("not_authenticated".into());
             }
             Err(err.message)
@@ -1112,8 +1170,9 @@ pub async fn fetch_notifications(
     match fetch_notifications_with(&octo).await {
         Ok(items) => Ok(items),
         Err(err) => {
-            if err.is_unauthorized {
-                clear_stored_token(&auth, "401 from fetch_notifications command");
+            if err.is_unauthorized
+                && clear_token_if_dead(&auth, &octo, "fetch_notifications command").await
+            {
                 return Err("not_authenticated".into());
             }
             Err(err.message)
@@ -1146,8 +1205,9 @@ pub async fn mark_notification_read(
         }
         Err(err) => {
             let ge = GithubError::from_octocrab(err);
-            if ge.is_unauthorized {
-                clear_stored_token(&auth, "401 from mark_notification_read command");
+            if ge.is_unauthorized
+                && clear_token_if_dead(&auth, &octo, "mark_notification_read command").await
+            {
                 return Err("not_authenticated".into());
             }
             Err(ge.message)
