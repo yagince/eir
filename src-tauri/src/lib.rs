@@ -88,10 +88,29 @@ pub fn run() {
             ));
 
             tray::setup(app)?;
+            // Shortcut registration must not abort startup: the combo can be
+            // legitimately taken by another app, or — during an updater
+            // relaunch — still held by the exiting old instance. The tray
+            // stays fully usable without it, and rebinding from Settings
+            // re-registers, so log and continue instead of dying with no
+            // menubar icon at all.
             let stored = shortcut::load_shortcut_string();
-            let parsed = shortcut::parse_shortcut(&stored)
-                .or_else(|_| shortcut::parse_shortcut(shortcut::DEFAULT_SHORTCUT))?;
-            app.global_shortcut().register(parsed)?;
+            match shortcut::parse_shortcut(&stored)
+                .or_else(|_| shortcut::parse_shortcut(shortcut::DEFAULT_SHORTCUT))
+            {
+                Ok(parsed) => {
+                    if let Err(e) = app.global_shortcut().register(parsed) {
+                        eprintln!("eir: global shortcut registration failed: {e}");
+                        diagnostics::log(&format!(
+                            "startup: global shortcut registration failed ({stored}): {e}"
+                        ));
+                    }
+                }
+                Err(e) => {
+                    eprintln!("eir: could not parse any shortcut: {e}");
+                    diagnostics::log(&format!("startup: shortcut parse failed ({stored}): {e}"));
+                }
+            }
 
             // Fetch loop runs in Rust so updates keep flowing while the
             // popup is hidden — WKWebView throttles JS timers then.
