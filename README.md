@@ -101,7 +101,6 @@ src-tauri/src/
   diff.rs                     Pure functions for "what changed" between two snapshots
   tray.rs                     Tray setup, toggle_popup, set_tray_badge (template+badge on macOS, tooltip elsewhere)
   shortcut.rs                 User-configurable global shortcut
-  updater.rs                  relaunch_app — macOS uses /usr/bin/open -n, others app.restart()
   settings_io.rs              Read/write the settings JSON without plugin-fs
   tauri.conf.json             Window config (440x680, hidden on launch, undecorated)
   icons/                      App & tray icons (tray-icon.png is template-mode)

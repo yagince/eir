@@ -7,6 +7,7 @@
     isPermissionGranted,
     requestPermission,
   } from "@tauri-apps/plugin-notification";
+  import { relaunch } from "@tauri-apps/plugin-process";
   import { check as checkForUpdate, Update } from "@tauri-apps/plugin-updater";
   import { ask, message, open, save } from "@tauri-apps/plugin-dialog";
   import {
@@ -430,7 +431,7 @@
     updateStatus = { kind: "downloading" };
     try {
       await update.downloadAndInstall();
-      await invoke("relaunch_app");
+      await relaunch();
     } catch (e) {
       const message = String(e);
       console.warn("[eir] update install failed:", message);
@@ -1502,4 +1503,3 @@
     }
   }
 </style>
-

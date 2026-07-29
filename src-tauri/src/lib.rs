@@ -7,7 +7,6 @@ mod settings_io;
 mod shortcut;
 mod snooze;
 mod tray;
-mod updater;
 
 use std::sync::Mutex;
 
@@ -29,6 +28,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_autostart::init(
             // On macOS we use the modern LaunchAgent; no extra CLI args.
@@ -68,7 +68,6 @@ pub fn run() {
             background::set_background_config,
             background::snooze_item,
             background::unsnooze_item,
-            updater::relaunch_app,
             diagnostics::get_diagnostics_enabled,
             diagnostics::set_diagnostics_enabled,
         ])
