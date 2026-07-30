@@ -28,6 +28,7 @@ tokio = { version = "1.52.1", features = ["rt", "time", "sync", "macros"] }
 tauri-plugin-notification = "2.3.3"
 rustls = { version = "0.23.38", default-features = false, features = ["aws-lc-rs"] }
 tauri-plugin-global-shortcut = "2.3.1"
+tauri-plugin-process = "2.3.1"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-dialog = "2.7.0"
@@ -38,4 +39,3 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 # Human-readable UTC timestamps for the auth diagnostics log. Already in the
 # tree transitively (via octocrab); listed directly for the explicit usage.
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-
