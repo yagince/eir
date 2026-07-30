@@ -28,6 +28,7 @@ impl GithubError {
         }
     }
 
+    #[cfg(test)]
     pub fn other(msg: impl Into<String>) -> Self {
         Self {
             message: msg.into(),
@@ -428,18 +429,6 @@ fn build_search_query(n: usize) -> String {
         vars = vars.join(", "),
         aliases = aliases.join("\n"),
     )
-}
-
-#[derive(Deserialize)]
-struct GqlResp {
-    data: Option<std::collections::HashMap<String, SearchResult>>,
-    #[serde(default)]
-    errors: Vec<GqlError>,
-}
-
-#[derive(Deserialize)]
-struct GqlError {
-    message: String,
 }
 
 #[derive(Deserialize)]
@@ -854,24 +843,14 @@ pub async fn fetch_watched_with(
         "variables": variables,
     });
 
-    let resp: GqlResp = octo
+    // octocrab 0.54+ unwraps a successful GraphQL response and deserializes
+    // only its `data` object into R. GraphQL-level errors are returned as
+    // octocrab::Error::Graphql, so callers must not model the outer
+    // `{ data, errors }` envelope here.
+    let data: HashMap<String, SearchResult> = octo
         .graphql(&body)
         .await
         .map_err(GithubError::from_octocrab)?;
-
-    if !resp.errors.is_empty() {
-        return Err(GithubError::other(
-            resp.errors
-                .into_iter()
-                .map(|e| e.message)
-                .collect::<Vec<_>>()
-                .join("; "),
-        ));
-    }
-
-    let Some(data) = resp.data else {
-        return Err(GithubError::other("graphql returned no data"));
-    };
 
     // Walk alias results in a stable order (s0, s1, ...) so the primary
     // `involves:@me` query always gets first crack at each id.
@@ -995,9 +974,9 @@ fn build_item_states_query(
     (query, variables)
 }
 
-fn parse_item_state(resp: &serde_json::Value, index: usize, kind: &str) -> &'static str {
+fn parse_item_state(data: &serde_json::Value, index: usize, kind: &str) -> &'static str {
     let alias = format!("i{index}");
-    let Some(node) = resp.get("data").and_then(|d| d.get(&alias)) else {
+    let Some(node) = data.get(&alias) else {
         return "unknown";
     };
     let inner_key = match kind {
@@ -1024,26 +1003,12 @@ pub async fn fetch_item_states_with(
     let (query, variables) = build_item_states_query(items);
     let body = serde_json::json!({ "query": query, "variables": variables });
 
-    let resp: serde_json::Value = octo
+    // As above, octocrab returns the successful GraphQL `data` object
+    // directly and converts the outer `errors` array into Error::Graphql.
+    let data: serde_json::Value = octo
         .graphql(&body)
         .await
         .map_err(GithubError::from_octocrab)?;
-
-    // Bubble GraphQL-level errors (e.g. a repo we no longer have access to)
-    // rather than silently returning "unknown" for every item — that would
-    // mask a real failure.
-    if let Some(errors) = resp.get("errors").and_then(|e| e.as_array()) {
-        if !errors.is_empty() {
-            let joined = errors
-                .iter()
-                .filter_map(|e| e.get("message").and_then(|m| m.as_str()))
-                .collect::<Vec<_>>()
-                .join("; ");
-            if !joined.is_empty() {
-                return Err(GithubError::other(joined));
-            }
-        }
-    }
 
     let mut out = Vec::with_capacity(items.len());
     for (i, it) in items.iter().enumerate() {
@@ -1052,7 +1017,7 @@ pub async fn fetch_item_states_with(
             "issue" => "issue",
             _ => continue,
         };
-        let state = parse_item_state(&resp, i, kind);
+        let state = parse_item_state(&data, i, kind);
         out.push(ItemState {
             repo: it.repo.clone(),
             kind,
@@ -1219,6 +1184,65 @@ pub async fn mark_notification_read(
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::io::{ErrorKind, Read, Write};
+    use std::net::TcpListener;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    /// Serve one GraphQL response without external network access.
+    ///
+    /// These tests intentionally exercise Octocrab's HTTP response handling,
+    /// rather than deserializing the inner `data` value ourselves. That is the
+    /// dependency boundary that changed in Octocrab 0.54.
+    fn serve_graphql_once(response_body: &str) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let response_body = response_body.to_string();
+
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                        assert!(
+                            Instant::now() < deadline,
+                            "timed out waiting for the GraphQL request"
+                        );
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(err) => panic!("failed to accept GraphQL request: {err}"),
+                }
+            };
+
+            let mut request = [0_u8; 1024];
+            let bytes_read = stream.read(&mut request).unwrap();
+            let request = String::from_utf8_lossy(&request[..bytes_read]);
+            assert!(
+                request.starts_with("POST /graphql "),
+                "unexpected request: {request}"
+            );
+
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        (format!("http://{address}"), server)
+    }
+
+    fn octocrab_for(base_uri: String) -> octocrab::Octocrab {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        octocrab::OctocrabBuilder::new()
+            .base_uri(base_uri)
+            .unwrap()
+            .build()
+            .unwrap()
+    }
 
     #[test]
     fn subject_kind_maps_known_types() {
@@ -2120,6 +2144,20 @@ mod tests {
         assert_eq!(out[1].id, 1);
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_watched_uses_octocrab_graphql_response_contract() {
+        let (base_uri, server) =
+            serve_graphql_once(r#"{"data":{"s0":{"nodes":[]},"s1":{"nodes":[]}}}"#);
+        let octo = octocrab_for(base_uri);
+
+        let items = fetch_watched_with(&octo, "all", &[], &HashMap::new(), true, true)
+            .await
+            .unwrap_or_else(|err| panic!("fetch_watched_with failed: {}", err.message));
+
+        server.join().unwrap();
+        assert!(items.is_empty());
+    }
+
     #[test]
     fn merge_search_results_dedups_by_id_across_aliases() {
         let mut data = std::collections::HashMap::new();
@@ -2213,6 +2251,43 @@ mod tests {
         }
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_item_states_uses_octocrab_graphql_response_contract() {
+        let (base_uri, server) = serve_graphql_once(
+            r#"{"data":{"i0":{"pullRequest":{"state":"MERGED"}},"i1":{"issue":{"state":"CLOSED"}}}}"#,
+        );
+        let octo = octocrab_for(base_uri);
+
+        let states = fetch_item_states_with(
+            &octo,
+            &[
+                make_item_ref("owner/repo", "pr", 10),
+                make_item_ref("owner/repo", "issue", 20),
+            ],
+        )
+        .await
+        .unwrap_or_else(|err| panic!("fetch_item_states_with failed: {}", err.message));
+
+        server.join().unwrap();
+        assert_eq!(
+            states,
+            vec![
+                ItemState {
+                    repo: "owner/repo".to_string(),
+                    kind: "pr",
+                    number: 10,
+                    state: "merged",
+                },
+                ItemState {
+                    repo: "owner/repo".to_string(),
+                    kind: "issue",
+                    number: 20,
+                    state: "closed",
+                },
+            ]
+        );
+    }
+
     #[test]
     fn build_item_states_query_uses_variables_for_owner_and_name() {
         let (query, variables) = build_item_states_query(&[
@@ -2261,26 +2336,24 @@ mod tests {
     }
 
     #[test]
-    fn parse_item_state_maps_merged_closed_open() {
-        let resp = json!({
-            "data": {
-                "i0": { "pullRequest": { "state": "MERGED" } },
-                "i1": { "pullRequest": { "state": "CLOSED" } },
-                "i2": { "issue": { "state": "CLOSED" } },
-                "i3": { "issue": { "state": "OPEN" } }
-            }
+    fn parse_item_state_maps_octocrab_unwrapped_data() {
+        let data = json!({
+            "i0": { "pullRequest": { "state": "MERGED" } },
+            "i1": { "pullRequest": { "state": "CLOSED" } },
+            "i2": { "issue": { "state": "CLOSED" } },
+            "i3": { "issue": { "state": "OPEN" } }
         });
-        assert_eq!(parse_item_state(&resp, 0, "pr"), "merged");
-        assert_eq!(parse_item_state(&resp, 1, "pr"), "closed");
-        assert_eq!(parse_item_state(&resp, 2, "issue"), "closed");
-        assert_eq!(parse_item_state(&resp, 3, "issue"), "open");
+        assert_eq!(parse_item_state(&data, 0, "pr"), "merged");
+        assert_eq!(parse_item_state(&data, 1, "pr"), "closed");
+        assert_eq!(parse_item_state(&data, 2, "issue"), "closed");
+        assert_eq!(parse_item_state(&data, 3, "issue"), "open");
     }
 
     #[test]
     fn parse_item_state_returns_unknown_for_missing_alias() {
-        let resp = json!({ "data": { "i0": { "pullRequest": { "state": "MERGED" } } } });
+        let data = json!({ "i0": { "pullRequest": { "state": "MERGED" } } });
         // Alias i99 isn't in the response — don't blow up, just say unknown.
-        assert_eq!(parse_item_state(&resp, 99, "pr"), "unknown");
+        assert_eq!(parse_item_state(&data, 99, "pr"), "unknown");
     }
 
     #[test]
@@ -2288,14 +2361,14 @@ mod tests {
         // GitHub returns `null` for the repository alias when the repo was
         // deleted or we lost access. The parser should fall back to unknown
         // instead of panicking.
-        let resp = json!({ "data": { "i0": null } });
-        assert_eq!(parse_item_state(&resp, 0, "pr"), "unknown");
+        let data = json!({ "i0": null });
+        assert_eq!(parse_item_state(&data, 0, "pr"), "unknown");
     }
 
     #[test]
     fn parse_item_state_returns_unknown_for_unknown_kind() {
-        let resp = json!({ "data": { "i0": { "pullRequest": { "state": "MERGED" } } } });
-        assert_eq!(parse_item_state(&resp, 0, "commit"), "unknown");
+        let data = json!({ "i0": { "pullRequest": { "state": "MERGED" } } });
+        assert_eq!(parse_item_state(&data, 0, "commit"), "unknown");
     }
 
     #[test]
