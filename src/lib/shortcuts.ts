@@ -16,35 +16,29 @@ function isLetter(key: string): boolean {
   return key.length === 1 && key >= "a" && key <= "z";
 }
 
+/// `cmdOrCtrl` accepts either key; otherwise both must match the binding
+/// exactly, so Cmd+U doesn't fire a Ctrl+U binding.
+function commandKeysMatch(e: KeyboardEvent, mods: Set<Mod>): boolean {
+  if (mods.has("cmdOrCtrl")) return e.metaKey || e.ctrlKey;
+  return e.metaKey === mods.has("cmd") && e.ctrlKey === mods.has("ctrl");
+}
+
+/// Shift controls letter case, so when a binding doesn't ask for it we ignore it
+/// on letter keys and "u" and "U" both match. Symbols are strict: Shift+/
+/// produces "?", which is a different binding.
+function shiftMatches(e: KeyboardEvent, key: string, wantShift: boolean): boolean {
+  if (wantShift) return e.shiftKey;
+  return isLetter(key) || !e.shiftKey;
+}
+
 export function matchShortcut(e: KeyboardEvent, def: Shortcut): boolean {
   const key = normalizeKey(e.key);
   if (key !== def.key) return false;
 
   const mods = new Set(def.mods ?? []);
-  const wantCmdOrCtrl = mods.has("cmdOrCtrl");
-  const wantCmd = mods.has("cmd");
-  const wantCtrl = mods.has("ctrl");
-  const wantShift = mods.has("shift");
-  const wantAlt = mods.has("alt");
-
-  if (wantCmdOrCtrl) {
-    if (!(e.metaKey || e.ctrlKey)) return false;
-  } else {
-    if (e.metaKey !== wantCmd) return false;
-    if (e.ctrlKey !== wantCtrl) return false;
-  }
-
-  // Shift controls letter case; when not explicitly required, ignore it for
-  // letter keys so "u" and "U" both match. For symbols like "/", enforce
-  // strictly — Shift+/ produces "?", a different binding.
-  if (wantShift) {
-    if (!e.shiftKey) return false;
-  } else if (!isLetter(key) && e.shiftKey) {
-    return false;
-  }
-
-  if (e.altKey !== wantAlt) return false;
-  return true;
+  if (!commandKeysMatch(e, mods)) return false;
+  if (!shiftMatches(e, key, mods.has("shift"))) return false;
+  return e.altKey === mods.has("alt");
 }
 
 export function isEditableTarget(target: EventTarget | null): boolean {

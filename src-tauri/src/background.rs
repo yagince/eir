@@ -9,7 +9,7 @@ use tauri_plugin_notification::NotificationExt;
 use tokio::sync::Notify;
 
 use crate::auth::AppState;
-use crate::diff::{compute_item_changes, fresh_notifications, item_key, removed_items};
+use crate::diff::{compute_item_changes, fresh_notifications, item_key, removed_items, ItemChange};
 use crate::github::{
     build_octocrab, clear_token_if_dead, fetch_item_states_with, fetch_notifications_with,
     fetch_watched_with, GithubError, ItemRef, LatestComment, NotificationItem, WatchedItem,
@@ -406,6 +406,144 @@ fn notif_reason_is_comment(reason: &str) -> bool {
     matches!(reason, "comment" | "mention" | "team_mention")
 }
 
+/// One "Reminder" per snooze that just came due. The id is looked up in the
+/// freshly-fetched items for a useful title; a miss still pings, because the
+/// user asked to be reminded and silence would break that promise.
+fn notify_snooze_expired(
+    app: &AppHandle,
+    snooze_expired: &[u64],
+    items_by_key: &HashMap<String, &WatchedItem>,
+) {
+    for id in snooze_expired {
+        let body = match items_by_key.values().find(|i| i.id == *id) {
+            Some(item) => format!("{}#{} — {}", item.repo, item.number, item.title),
+            None => "Snoozed item is back".to_string(),
+        };
+        eprintln!("[eir] notify snooze-ended: id={id}");
+        send_os_notification(app, "Reminder", &body);
+    }
+}
+
+/// Threads the notifications inbox has never shown us before.
+fn notify_fresh_threads(
+    app: &AppHandle,
+    fresh: &[NotificationItem],
+    items_by_key: &HashMap<String, &WatchedItem>,
+    snoozed_keys: &HashSet<String>,
+) {
+    for n in fresh {
+        let Some(num) = n.number else { continue };
+        let key = item_key(&n.repo, n.kind, num);
+        if snoozed_keys.contains(&key) {
+            continue;
+        }
+        let title = build_title(&n.repo, n.kind, num, &n.title);
+        // Only comment-driven reasons should render the latest-comment body.
+        // CI / state / review-requested / assign reasons keep the short label
+        // so the user sees what actually changed.
+        let body = if notif_reason_is_comment(&n.reason) {
+            match items_by_key
+                .get(&key)
+                .and_then(|i| i.latest_comment.as_ref())
+            {
+                Some(c) => build_comment_body(c, 0),
+                None => reason_label(&n.reason).to_string(),
+            }
+        } else {
+            reason_label(&n.reason).to_string()
+        };
+        eprintln!("[eir] notify fresh: {} — {key}", n.reason);
+        send_os_notification(app, &title, &body);
+    }
+}
+
+/// Items already on the list whose state moved since the last cycle.
+fn notify_item_changes(app: &AppHandle, item_changes: &[ItemChange], snoozed_active: &SnoozedMap) {
+    for ic in item_changes {
+        if snoozed_active.contains_key(&ic.item.id) {
+            continue;
+        }
+        let title = build_title(&ic.item.repo, ic.item.kind, ic.item.number, &ic.item.title);
+        // Only `+N comment(s)` reasons should render the latest-comment body.
+        // State transitions, CI changes, draft flips, reviewer state shifts,
+        // and the catch-all "Updated" all keep the reason text so a CI run or
+        // a force-push doesn't show up as someone's unrelated comment.
+        let body = if reason_is_comment_event(&ic.reason) {
+            match ic.item.latest_comment.as_ref() {
+                Some(c) => build_comment_body(c, extra_comment_count(&ic.reason)),
+                None => ic.reason.clone(),
+            }
+        } else {
+            ic.reason.clone()
+        };
+        eprintln!(
+            "[eir] notify item-change: {} — {}#{}",
+            ic.reason, ic.item.repo, ic.item.number
+        );
+        send_os_notification(app, &title, &body);
+    }
+}
+
+/// Items that dropped out of the search, which means closed or merged. Needs the
+/// extra round-trip because the search result no longer contains them.
+async fn notify_removed(
+    app: &AppHandle,
+    octo: &octocrab::Octocrab,
+    removed: Vec<WatchedItem>,
+    snoozed_active: &SnoozedMap,
+) {
+    // A snoozed item that gets closed/merged would otherwise generate a
+    // `removed` ping — keep the snooze contract intact and silently drop those
+    // instead of pinging.
+    let removed: Vec<WatchedItem> = removed
+        .into_iter()
+        .filter(|i| !snoozed_active.contains_key(&i.id))
+        .collect();
+    if removed.is_empty() {
+        return;
+    }
+
+    let refs: Vec<ItemRef> = removed
+        .iter()
+        .map(|i| ItemRef {
+            repo: i.repo.clone(),
+            kind: i.kind.to_string(),
+            number: i.number,
+        })
+        .collect();
+    // A failed lookup falls back to "Closed" for every item rather than
+    // silencing the whole batch — silence is worse than an occasionally-wrong
+    // "Closed" vs "Merged" label.
+    let states = fetch_item_states_with(octo, &refs)
+        .await
+        .unwrap_or_else(|err| {
+            eprintln!("[eir] fetch_item_states failed: {}", err.message);
+            Vec::new()
+        });
+    let by_key: HashMap<String, &'static str> = states
+        .into_iter()
+        .map(|s| (item_key(&s.repo, s.kind, s.number), s.state))
+        .collect();
+
+    for item in &removed {
+        let state = by_key
+            .get(&item_key(&item.repo, item.kind, item.number))
+            .copied()
+            .unwrap_or("closed");
+        let title = if state == "merged" {
+            "Merged"
+        } else {
+            "Closed"
+        };
+        let body = format!("{}#{} — {}", item.repo, item.number, item.title);
+        eprintln!(
+            "[eir] notify removed: {title} — {}#{}",
+            item.repo, item.number
+        );
+        send_os_notification(app, title, &body);
+    }
+}
+
 async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
     // Pull the current token off AppState. No token = sign-in required, and
     // we clear cached state without emitting the "loading" prelude because
@@ -614,115 +752,13 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
     // `has_loaded_once` gate (which guards against the first-cycle banner
     // storm for fresh/item_changes/removed) is intentionally skipped here.
     if notify_enabled {
-        for id in &snooze_expired {
-            let (title, body) = match items_by_key.values().find(|i| i.id == *id) {
-                Some(item) => (
-                    "Reminder".to_string(),
-                    format!("{}#{} — {}", item.repo, item.number, item.title),
-                ),
-                None => ("Reminder".to_string(), "Snoozed item is back".to_string()),
-            };
-            eprintln!("[eir] notify snooze-ended: id={id}");
-            send_os_notification(app, &title, &body);
-        }
+        notify_snooze_expired(app, &snooze_expired, &items_by_key);
     }
 
     if has_loaded_once && notify_enabled {
-        for n in &fresh {
-            let Some(num) = n.number else { continue };
-            let key = item_key(&n.repo, n.kind, num);
-            if snoozed_keys.contains(&key) {
-                continue;
-            }
-            let title = build_title(&n.repo, n.kind, num, &n.title);
-            // Only comment-driven reasons should render the latest-comment
-            // body. CI / state / review-requested / assign reasons keep the
-            // short label so the user sees what actually changed.
-            let body = if notif_reason_is_comment(&n.reason) {
-                match items_by_key
-                    .get(&key)
-                    .and_then(|i| i.latest_comment.as_ref())
-                {
-                    Some(c) => build_comment_body(c, 0),
-                    None => reason_label(&n.reason).to_string(),
-                }
-            } else {
-                reason_label(&n.reason).to_string()
-            };
-            eprintln!("[eir] notify fresh: {} — {key}", n.reason);
-            send_os_notification(app, &title, &body);
-        }
-        for ic in &item_changes {
-            if snoozed_active.contains_key(&ic.item.id) {
-                continue;
-            }
-            let title = build_title(&ic.item.repo, ic.item.kind, ic.item.number, &ic.item.title);
-            // Only `+N comment(s)` reasons should render the latest-comment
-            // body. State transitions, CI changes, draft flips, reviewer
-            // state shifts, and the catch-all "Updated" all keep the reason
-            // text so a CI run or a force-push doesn't show up as someone's
-            // unrelated comment.
-            let body = if reason_is_comment_event(&ic.reason) {
-                match ic.item.latest_comment.as_ref() {
-                    Some(c) => build_comment_body(c, extra_comment_count(&ic.reason)),
-                    None => ic.reason.clone(),
-                }
-            } else {
-                ic.reason.clone()
-            };
-            eprintln!(
-                "[eir] notify item-change: {} — {}#{}",
-                ic.reason, ic.item.repo, ic.item.number
-            );
-            send_os_notification(app, &title, &body);
-        }
-        // A snoozed item that gets closed/merged would otherwise generate a
-        // `removed` ping — keep the snooze contract intact and silently drop
-        // those instead of pinging.
-        let removed: Vec<WatchedItem> = removed
-            .into_iter()
-            .filter(|i| !snoozed_active.contains_key(&i.id))
-            .collect();
-        if !removed.is_empty() {
-            let refs: Vec<ItemRef> = removed
-                .iter()
-                .map(|i| ItemRef {
-                    repo: i.repo.clone(),
-                    kind: i.kind.to_string(),
-                    number: i.number,
-                })
-                .collect();
-            // A failed lookup falls back to "Closed" for every item rather
-            // than silencing the whole batch — silence is worse than an
-            // occasionally-wrong "Closed" vs "Merged" label.
-            let states = fetch_item_states_with(&octo, &refs)
-                .await
-                .unwrap_or_else(|err| {
-                    eprintln!("[eir] fetch_item_states failed: {}", err.message);
-                    Vec::new()
-                });
-            let by_key: HashMap<String, &'static str> = states
-                .into_iter()
-                .map(|s| (item_key(&s.repo, s.kind, s.number), s.state))
-                .collect();
-            for item in &removed {
-                let state = by_key
-                    .get(&item_key(&item.repo, item.kind, item.number))
-                    .copied()
-                    .unwrap_or("closed");
-                let title = if state == "merged" {
-                    "Merged"
-                } else {
-                    "Closed"
-                };
-                let body = format!("{}#{} — {}", item.repo, item.number, item.title);
-                eprintln!(
-                    "[eir] notify removed: {title} — {}#{}",
-                    item.repo, item.number
-                );
-                send_os_notification(app, title, &body);
-            }
-        }
+        notify_fresh_threads(app, &fresh, &items_by_key, &snoozed_keys);
+        notify_item_changes(app, &item_changes, &snoozed_active);
+        notify_removed(app, &octo, removed, &snoozed_active).await;
     }
 
     let next_threads: HashMap<u64, String> = notifs

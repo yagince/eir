@@ -5,6 +5,12 @@ description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
 
+# cognitive_complexity is a clippy nursery lint, so it is off by default; the
+# threshold lives in clippy.toml. `warn` is enough for enforcement because CI
+# runs clippy with -D warnings, while a local `cargo clippy` still just warns.
+[lints.clippy]
+cognitive_complexity = "warn"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]

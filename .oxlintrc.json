@@ -14,13 +14,12 @@
     // toSorted() would allocate a second copy to protect a throwaway one.
     "unicorn/no-array-sort": "off",
 
-    // Complexity limits. ESLint's default max of 20 is the loosest setting that
-    // still had something to say here, and nothing is exempted: the one function
-    // over it (settings import, at 33) was split and its validation extracted to
-    // $lib/settings-import.ts, which made it unit-testable in the process.
-    // max-statements is deliberately absent — at its default of 10 it reports 16
-    // functions, none of which are actually hard to read.
-    "complexity": ["error", { "max": 20 }],
+    // Complexity limits, with nothing exempted. 10 is stricter than ESLint's
+    // default of 20; getting there meant splitting five functions, each of which
+    // turned into named predicates or "was the key consumed" helpers rather than
+    // one long cascade. max-statements is deliberately absent — at its default of
+    // 10 it reports 16 functions, none of which are actually hard to read.
+    "complexity": ["error", { "max": 10 }],
     "max-depth": "error",
     "max-params": "error",
     "max-nested-callbacks": "error",

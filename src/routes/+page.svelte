@@ -702,77 +702,90 @@
     },
   ];
 
+  /// While rebinding, every keystroke belongs to the capture UI, so it is
+  /// swallowed rather than reaching the list. Rust decides whether the combo can
+  /// actually be registered.
+  async function captureShortcutKey(e: KeyboardEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === "Escape") {
+      capturingShortcut = false;
+      return;
+    }
+    const combo = formatShortcut(e);
+    if (!combo) return;
+    try {
+      await invoke("set_toggle_shortcut", { shortcut: combo });
+      toggleShortcut = combo;
+      shortcutError = null;
+    } catch (err) {
+      shortcutError = String(err);
+    } finally {
+      capturingShortcut = false;
+    }
+  }
+
+  /// Selection and tab movement. Returns whether the key was consumed.
+  function handleNavigationKey(e: KeyboardEvent): boolean {
+    switch (e.key) {
+      case "ArrowDown":
+        moveSelection(1);
+        return true;
+      case "ArrowUp":
+        moveSelection(-1);
+        return true;
+      case "ArrowLeft":
+        moveTab(-1);
+        return true;
+      case "ArrowRight":
+        moveTab(1);
+        return true;
+      case "Enter":
+        openSelected();
+        return true;
+      default:
+        return false;
+    }
+  }
+
+  /// Viewport-sized scrolling of the list. Returns whether the key was consumed.
+  function handleScrollKey(e: KeyboardEvent): boolean {
+    const list = document.querySelector<HTMLElement>(".list");
+    if (!list) return false;
+    // Overlap by 40px so a row straddling the fold stays readable, but never
+    // scroll less than 48px on a very short popup.
+    const page = Math.max(list.clientHeight - 40, 48);
+    switch (e.key) {
+      case "PageDown":
+        list.scrollBy({ top: page });
+        return true;
+      case "PageUp":
+        list.scrollBy({ top: -page });
+        return true;
+      case "Home":
+        list.scrollTop = 0;
+        return true;
+      case "End":
+        list.scrollTop = list.scrollHeight;
+        return true;
+      default:
+        return false;
+    }
+  }
+
   async function handleGlobalKey(e: KeyboardEvent) {
     if (capturingShortcut) {
-      e.preventDefault();
-      e.stopPropagation();
-      if (e.key === "Escape") {
-        capturingShortcut = false;
-        return;
-      }
-      const combo = formatShortcut(e);
-      if (!combo) return;
-      try {
-        await invoke("set_toggle_shortcut", { shortcut: combo });
-        toggleShortcut = combo;
-        shortcutError = null;
-      } catch (err) {
-        shortcutError = String(err);
-      } finally {
-        capturingShortcut = false;
-      }
+      await captureShortcutKey(e);
       return;
     }
 
     if (dispatchShortcut(e, shortcuts)) return;
 
-    if (phase === "loaded" && !showingSettings) {
-      if (isEditableTarget(e.target)) return;
+    if (phase !== "loaded" || showingSettings) return;
+    if (isEditableTarget(e.target)) return;
 
-      switch (e.key) {
-        case "ArrowDown":
-          moveSelection(1);
-          e.preventDefault();
-          return;
-        case "ArrowUp":
-          moveSelection(-1);
-          e.preventDefault();
-          return;
-        case "ArrowLeft":
-          moveTab(-1);
-          e.preventDefault();
-          return;
-        case "ArrowRight":
-          moveTab(1);
-          e.preventDefault();
-          return;
-        case "Enter":
-          openSelected();
-          e.preventDefault();
-          return;
-      }
-
-      const list = document.querySelector<HTMLElement>(".list");
-      if (!list) return;
-      const page = Math.max(list.clientHeight - 40, 48);
-      switch (e.key) {
-        case "PageDown":
-          list.scrollBy({ top: page });
-          e.preventDefault();
-          return;
-        case "PageUp":
-          list.scrollBy({ top: -page });
-          e.preventDefault();
-          return;
-        case "Home":
-          list.scrollTop = 0;
-          e.preventDefault();
-          return;
-        case "End":
-          list.scrollTop = list.scrollHeight;
-          e.preventDefault();
-          return;
-      }
+    if (handleNavigationKey(e) || handleScrollKey(e)) {
+      e.preventDefault();
     }
   }
 
@@ -1103,28 +1116,32 @@
       applied.push("latest comment preview");
     }
 
-    // Applied raw, skipping the both-off guard in the change handlers, so an
-    // export with either flag set survives while a (defensive) both-false case
-    // is left alone rather than mutating state — pushFullConfig re-syncs the
-    // worker either way.
-    const nextIncludePRs = parsed.includePRs ?? includePRs;
-    const nextIncludeIssues = parsed.includeIssues ?? includeIssues;
-    if (nextIncludePRs || nextIncludeIssues) {
-      if (parsed.includePRs !== undefined && parsed.includePRs !== includePRs) {
-        includePRs = parsed.includePRs;
-        persistIncludePRs(parsed.includePRs);
-        applied.push("include PRs");
-      }
-      if (parsed.includeIssues !== undefined && parsed.includeIssues !== includeIssues) {
-        includeIssues = parsed.includeIssues;
-        persistIncludeIssues(parsed.includeIssues);
-        applied.push("include Issues");
-      }
-    }
+    applyImportedIncludes(parsed, applied);
 
     if (parsed.theme !== undefined) {
       onThemeChange(parsed.theme);
       applied.push("theme");
+    }
+  }
+
+  /// The PR/Issue include pair. Applied raw, skipping the both-off guard in the
+  /// change handlers, so an export with either flag set survives while a
+  /// (defensive) both-false case is left alone rather than mutating state —
+  /// pushFullConfig re-syncs the worker either way.
+  function applyImportedIncludes(parsed: ImportedSettings, applied: string[]) {
+    const nextIncludePRs = parsed.includePRs ?? includePRs;
+    const nextIncludeIssues = parsed.includeIssues ?? includeIssues;
+    if (!nextIncludePRs && !nextIncludeIssues) return;
+
+    if (parsed.includePRs !== undefined && parsed.includePRs !== includePRs) {
+      includePRs = parsed.includePRs;
+      persistIncludePRs(parsed.includePRs);
+      applied.push("include PRs");
+    }
+    if (parsed.includeIssues !== undefined && parsed.includeIssues !== includeIssues) {
+      includeIssues = parsed.includeIssues;
+      persistIncludeIssues(parsed.includeIssues);
+      applied.push("include Issues");
     }
   }
 

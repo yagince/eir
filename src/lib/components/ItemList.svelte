@@ -191,6 +191,13 @@
   /// native date and time inputs expect.
   const pad = (n: number) => n.toString().padStart(2, "0");
 
+  /// An integer in `0..=max`, or null. Blank input lands here mid-edit and must
+  /// read as "not a number yet" rather than coercing to 0.
+  function parseBounded(raw: string, max: number): number | null {
+    const n = Number.parseInt(raw, 10);
+    return Number.isFinite(n) && n >= 0 && n <= max ? n : null;
+  }
+
   /// Seed both pickers with "1 hour from now" so opening custom mode lets
   /// the user nudge a sensible default rather than type from scratch.
   function seedCustomDefaults() {
@@ -214,11 +221,9 @@
   /// `NaN` mid-edit.
   function customUntilSec(): number | null {
     if (!customDate) return null;
-    if (!customHourStr || !customMinuteStr) return null;
-    const h = Number.parseInt(customHourStr, 10);
-    const m = Number.parseInt(customMinuteStr, 10);
-    if (!Number.isFinite(h) || h < 0 || h > 23) return null;
-    if (!Number.isFinite(m) || m < 0 || m > 59) return null;
+    const h = parseBounded(customHourStr, 23);
+    const m = parseBounded(customMinuteStr, 59);
+    if (h === null || m === null) return null;
     const t = new Date(`${customDate}T${pad(h)}:${pad(m)}`).getTime();
     if (!Number.isFinite(t)) return null;
     const sec = Math.floor(t / 1000);
