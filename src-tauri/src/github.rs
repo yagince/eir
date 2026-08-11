@@ -1216,6 +1216,16 @@ mod tests {
                 }
             };
 
+            // macOS hands back an accepted socket that inherited the listener's
+            // non-blocking flag, so the read below could return WouldBlock before
+            // the request bytes arrived and panic on the unwrap — this test failed
+            // roughly one run in five. Blocking with a timeout keeps the deadline
+            // behaviour without racing the client.
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+
             let mut request = [0_u8; 1024];
             let bytes_read = stream.read(&mut request).unwrap();
             let request = String::from_utf8_lossy(&request[..bytes_read]);

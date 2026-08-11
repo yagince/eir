@@ -120,14 +120,27 @@ pub(crate) fn suppressed_by_repo(
 }
 
 impl BackgroundState {
-    pub fn new() -> Self {
+    /// The in-memory defaults, without reading anything off disk.
+    ///
+    /// Split out so tests can build a state without `snooze::load_active()`,
+    /// which purges expired entries and *writes the file back* — pointed at a
+    /// real `$HOME` that meant `cargo test` rewrote the developer's own
+    /// `~/.config/eir/snoozed.json` and seeded their live snooze state into
+    /// eleven unrelated tests.
+    fn with_defaults() -> Self {
         Self {
             notify_enabled: true,
             interval_ms: DEFAULT_INTERVAL_MS,
             include_prs: true,
             include_issues: true,
-            snoozed: snooze::load_active(),
             ..Default::default()
+        }
+    }
+
+    pub fn new() -> Self {
+        Self {
+            snoozed: snooze::load_active(),
+            ..Self::with_defaults()
         }
     }
 
@@ -1539,7 +1552,7 @@ mod apply_background_config_tests {
         // items, and the next cycle (querying the NEW tab) would diff
         // against those — firing spurious "Closed" / "New in list"
         // notifications for items that simply fell outside the new filter.
-        let mut s = BackgroundState::new();
+        let mut s = BackgroundState::with_defaults();
         seed_loaded_state(&mut s, Tab::All);
         let before = s.config_generation;
 
@@ -1561,7 +1574,7 @@ mod apply_background_config_tests {
     #[test]
     fn watched_orgs_change_bumps_generation() {
         // Same race applies for watched_orgs: it's part of the search query.
-        let mut s = BackgroundState::new();
+        let mut s = BackgroundState::with_defaults();
         seed_loaded_state(&mut s, Tab::All);
         let before = s.config_generation;
 
@@ -1583,7 +1596,7 @@ mod apply_background_config_tests {
         // Pushing the same tab back must not invalidate anchors —
         // otherwise switchTab idempotency would silently drop the
         // legitimate diff history every refresh.
-        let mut s = BackgroundState::new();
+        let mut s = BackgroundState::with_defaults();
         seed_loaded_state(&mut s, Tab::Review);
         let before = s.config_generation;
 
@@ -1598,7 +1611,7 @@ mod apply_background_config_tests {
     fn repo_settings_change_bumps_generation_and_marks_badge_dirty() {
         // A widening override changes the GraphQL query, so anchors are stale
         // and the badge composition has shifted.
-        let mut s = BackgroundState::new();
+        let mut s = BackgroundState::with_defaults();
         seed_loaded_state(&mut s, Tab::All);
         let before = s.config_generation;
 
@@ -1629,7 +1642,7 @@ mod apply_background_config_tests {
         // {prs:true, issues:true} is a real override — with a global Include
         // toggle off it widens both kinds back in for the repo, so it must
         // survive a round-trip and stay visible rather than vanishing.
-        let mut s = BackgroundState::new();
+        let mut s = BackgroundState::with_defaults();
         seed_loaded_state(&mut s, Tab::All);
 
         let mut next = HashMap::new();
@@ -1660,7 +1673,7 @@ mod apply_background_config_tests {
 
     #[test]
     fn repo_settings_no_op_does_not_bump_generation() {
-        let mut s = BackgroundState::new();
+        let mut s = BackgroundState::with_defaults();
         seed_loaded_state(&mut s, Tab::All);
         s.repo_settings.insert(
             "o/r".to_string(),
@@ -1696,7 +1709,7 @@ mod apply_background_config_tests {
         // Same race story as tab / watched_orgs: include_prs / include_issues
         // change the GraphQL query, so an in-flight cycle's anchors are now
         // stale.
-        let mut s = BackgroundState::new();
+        let mut s = BackgroundState::with_defaults();
         seed_loaded_state(&mut s, Tab::All);
         let before = s.config_generation;
 
@@ -1722,7 +1735,7 @@ mod apply_background_config_tests {
         // Pushing the same flags back must not invalidate anchors —
         // e.g. importing settings that match current values shouldn't
         // wipe the diff history.
-        let mut s = BackgroundState::new();
+        let mut s = BackgroundState::with_defaults();
         seed_loaded_state(&mut s, Tab::All);
         let before = s.config_generation;
 
@@ -1745,7 +1758,7 @@ mod apply_background_config_tests {
         // The frontend already prevents this via the disabled checkbox, but
         // a malformed import shouldn't strand the worker with nothing to
         // query — silently keep the previous flags instead.
-        let mut s = BackgroundState::new();
+        let mut s = BackgroundState::with_defaults();
         seed_loaded_state(&mut s, Tab::All);
         let before_prs = s.include_prs;
         let before_issues = s.include_issues;
@@ -1771,7 +1784,7 @@ mod apply_background_config_tests {
         // sign-out / 401 resetting the session must invalidate any in-flight
         // cycle so its write-back can't resurrect items + authenticated=true
         // after the user signed out.
-        let mut s = BackgroundState::new();
+        let mut s = BackgroundState::with_defaults();
         seed_loaded_state(&mut s, Tab::All);
         s.authenticated = true;
         let before = s.config_generation;

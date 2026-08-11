@@ -6,6 +6,8 @@ mod github;
 mod settings_io;
 mod shortcut;
 mod snooze;
+#[cfg(test)]
+mod test_env;
 mod tray;
 
 use std::sync::Mutex;
