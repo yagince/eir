@@ -125,9 +125,22 @@ jobs:
           # verify the download.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Ad-hoc macOS codesign only; adding an Apple Developer ID later
-          # will populate APPLE_CERTIFICATE / APPLE_SIGNING_IDENTITY and
-          # enable real signing + notarization without changing the workflow.
+          # Apple Developer ID signing. tauri-cli imports the .p12 into a
+          # throwaway keychain and derives the signing identity from the
+          # certificate itself, so no APPLE_SIGNING_IDENTITY is needed (and
+          # tauri.conf.json must NOT pin one: a value that disagrees with the
+          # certificate is a hard error). Ignored on Linux/Windows.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          # Notarization runs inside tauri-cli (notarytool + stapler) when
+          # these three are present — no separate notarize action needed. It
+          # happens before the updater .app.tar.gz is packed, so the payload
+          # the updater installs carries a stapled ticket too. Adds a few
+          # minutes to the macOS jobs while Apple's service processes it.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           # Upload into the draft the create-release job already made rather
           # than triggering tauri-action's own "find or create" path (which
@@ -140,6 +153,29 @@ jobs:
           # input here was a typo for uploadUpdaterJson and silently ignored.)
           uploadUpdaterJson: false
           args: --target ${{ matrix.target }}
+
+      # tauri-cli degrades silently on both halves of this: no APPLE_CERTIFICATE
+      # means an ad-hoc signature, and no APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID
+      # means notarization is skipped. Either way the job stays green while
+      # shipping a bundle macOS refuses to exec after an in-place update — AMFI
+      # rejected the ad-hoc binary in v0.17.5 with "adhoc signed or signed by an
+      # unknown certificate chain", which is what broke relaunch. So assert
+      # against the built artifact rather than trusting the inputs.
+      - name: Verify macOS signature and notarization
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          set -euo pipefail
+          APP="src-tauri/target/${{ matrix.target }}/release/bundle/macos/eir.app"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          codesign -dvv "$APP" > codesign.txt 2>&1
+          cat codesign.txt
+          grep -q "Authority=Developer ID Application:" codesign.txt \
+            || { echo "::error::not signed with a Developer ID certificate (APPLE_CERTIFICATE secret missing?)"; exit 1; }
+          grep -q "flags=.*runtime" codesign.txt \
+            || { echo "::error::hardened runtime not enabled"; exit 1; }
+          xcrun stapler validate "$APP" \
+            || { echo "::error::no stapled notarization ticket (APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID secrets missing?)"; exit 1; }
+          spctl --assess --type execute -vvv "$APP"
 
   # The matrix jobs used to each download-merge-reupload latest.json. Those
   # unsynchronised read-modify-write cycles race, and the last writer clobbers
