@@ -59,6 +59,7 @@ pub fn run() {
             github::fetch_item_states,
             github::mark_notification_read,
             tray::set_tray_badge,
+            tray::show_popup,
             shortcut::get_toggle_shortcut,
             shortcut::set_toggle_shortcut,
             settings_io::write_text_file,

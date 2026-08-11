@@ -141,11 +141,17 @@
   // `actionPerformed` event that `onAction` listens for (that wiring only
   // exists on iOS/Android). So to handle clicks we create the Notification
   // ourselves and attach `.onclick` directly.
-  function showNotification(title: string, body: string, url?: string) {
+  function showNotification(
+    title: string,
+    body: string,
+    url?: string,
+    onClick?: () => void,
+  ) {
     const n = new Notification(title, { body });
-    if (url) {
+    if (onClick || url) {
       n.onclick = () => {
-        void openUrl(url);
+        if (onClick) onClick();
+        else if (url) void openUrl(url);
         n.close();
       };
     }
@@ -159,6 +165,16 @@
     | { kind: "downloading" }
     | { kind: "error"; message: string };
   let updateStatus = $state<UpdateStatus>({ kind: "idle" });
+  // Dismissal is per-version: silencing v0.17.7's banner shouldn't also
+  // silence whatever ships next.
+  let dismissedUpdateVersion = $state<string | null>(null);
+  // Tracked apart from `updateStatus.kind === "error"` so the banner only
+  // reacts to a failed *install*. Check failures are routine (closed laptop,
+  // no network) and belong in Settings rather than on every popup open.
+  let updateInstallError = $state<string | null>(null);
+  // Rate-limits the check we run when the popup opens. Not $state: nothing
+  // renders it.
+  let lastUpdateCheckAt = 0;
   let appVersion = $state<string>("");
   let autostartEnabled = $state<boolean | null>(null);
   let diagnosticsEnabled = $state<boolean>(false);
@@ -360,6 +376,9 @@
   async function runUpdateCheck(opts: { interactive: boolean }) {
     if (updateStatus.kind === "checking" || updateStatus.kind === "downloading")
       return;
+    // Stamped before the attempt, not after, so a failing check (offline) still
+    // backs off instead of retrying on every popup open.
+    lastUpdateCheckAt = Date.now();
     updateStatus = { kind: "checking" };
     try {
       const update = await checkForUpdate();
@@ -384,7 +403,13 @@
         if (await ensureNotificationPermission()) {
           showNotification(
             "eir update available",
-            `Version ${update.version} is ready. Open Settings to install.`,
+            `Version ${update.version} is ready to install.`,
+            undefined,
+            // Land them on the popup, where the banner offers the install in
+            // one click. macOS suppresses these banners while eir is
+            // frontmost and they vanish quickly regardless, so the popup
+            // banner — not this notification — is the durable signal.
+            () => void invoke("show_popup"),
           );
         }
       }
@@ -428,6 +453,7 @@
       ),
     );
     if (!ok) return;
+    updateInstallError = null;
     updateStatus = { kind: "downloading" };
     try {
       await update.downloadAndInstall();
@@ -436,7 +462,29 @@
       const message = String(e);
       console.warn("[eir] update install failed:", message);
       updateStatus = { kind: "error", message };
+      updateInstallError = message;
     }
+  }
+
+  // Which banner, if any, belongs at the top of the popup.
+  const updateBanner = $derived.by(() => {
+    if (updateStatus.kind === "downloading")
+      return { state: "downloading" as const };
+    if (updateInstallError) return { state: "failed" as const };
+    if (
+      updateStatus.kind === "available" &&
+      updateStatus.update.version !== dismissedUpdateVersion
+    ) {
+      return { state: "available" as const, version: updateStatus.update.version };
+    }
+    return null;
+  });
+
+  function dismissUpdateBanner() {
+    if (updateStatus.kind === "available") {
+      dismissedUpdateVersion = updateStatus.update.version;
+    }
+    updateInstallError = null;
   }
 
   async function sendTestNotification() {
@@ -551,6 +599,15 @@
     if (document.visibilityState !== "visible") return;
     const list = document.querySelector<HTMLElement>(".list");
     if (list) list.scrollTop = 0;
+    // The interval in startUpdateCheckTimer() is a JS timer, and WKWebView
+    // throttles those while the popup is hidden — which for a menubar app is
+    // most of the time — so on a long-running instance it can go far longer
+    // than an hour between checks. Opening the popup is the one moment we know
+    // the webview is live, so re-check here too (rate-limited to the same
+    // interval).
+    if (Date.now() - lastUpdateCheckAt >= UPDATE_CHECK_INTERVAL_MS) {
+      void runUpdateCheck({ interactive: false });
+    }
   }
 
   function formatShortcut(e: KeyboardEvent): string | null {
@@ -1391,6 +1448,44 @@
       onReopenVerification={(url) => openUrl(url)}
     />
   {:else}
+    {#if updateBanner}
+      <div
+        class="update-banner"
+        class:failed={updateBanner.state === "failed"}
+        role="status"
+      >
+        {#if updateBanner.state === "downloading"}
+          <span class="update-banner-text">Installing update…</span>
+        {:else if updateBanner.state === "failed"}
+          <span class="update-banner-text" title={updateInstallError}>
+            Update failed
+          </span>
+          <button
+            class="update-banner-action"
+            onclick={() => runUpdateCheck({ interactive: false })}
+          >
+            Retry
+          </button>
+        {:else}
+          <span class="update-banner-text">
+            Version {updateBanner.version} is available
+          </span>
+          <button class="update-banner-action" onclick={installPendingUpdate}>
+            Update
+          </button>
+        {/if}
+        {#if updateBanner.state !== "downloading"}
+          <button
+            class="update-banner-dismiss"
+            onclick={dismissUpdateBanner}
+            title="Dismiss"
+            aria-label="Dismiss update notice"
+          >
+            ×
+          </button>
+        {/if}
+      </div>
+    {/if}
     <ItemList
       {loading}
       {activeTab}
@@ -1437,6 +1532,73 @@
     height: 100vh;
     padding: 16px;
     box-sizing: border-box;
+  }
+
+  /* Sits above ItemList's toolbar, outside the scrolling list, so a pending
+     update stays visible however far down the list you are. */
+  .update-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: none;
+    margin-bottom: 8px;
+    padding: 6px 6px 6px 10px;
+    border: 1px solid var(--accent-bg-strong);
+    border-radius: 6px;
+    background: var(--accent-bg);
+    font-size: 12px;
+    color: var(--fg);
+  }
+
+  .update-banner.failed {
+    border-color: var(--danger);
+    background: var(--danger-bg-faint);
+  }
+
+  .update-banner-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+
+  .update-banner-action {
+    flex: none;
+    padding: 4px 10px;
+    border: none;
+    border-radius: 6px;
+    background: var(--accent);
+    color: var(--on-accent);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .update-banner-action:hover {
+    background: var(--accent-bg-hover);
+  }
+
+  .update-banner-dismiss {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: none;
+    border-radius: 4px;
+    background: transparent;
+    color: var(--fg-muted);
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .update-banner-dismiss:hover {
+    background: var(--hover-bg);
+    color: var(--fg);
   }
 
   .progress-bar {

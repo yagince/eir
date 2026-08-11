@@ -184,6 +184,27 @@ pub fn toggle_popup(app: &tauri::AppHandle) {
     });
 }
 
+/// Show the popup without the toggle behaviour. Clicking the "update
+/// available" notification invokes this to land the user on the update banner;
+/// [`toggle_popup`] would hide the popup whenever it happened to be open
+/// already, which from a notification click reads as the click doing nothing.
+#[tauri::command]
+pub fn show_popup(app: tauri::AppHandle) {
+    let app_handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let Some(window) = app_handle.get_webview_window("main") else {
+            return;
+        };
+        // Only re-position while hidden: moving a window the user is already
+        // looking at makes it jump for no reason.
+        if !window.is_visible().unwrap_or(false) {
+            position_near_tray(&app_handle, &window);
+        }
+        let _ = window.show();
+        let _ = window.set_focus();
+    });
+}
+
 fn toggle_popup_on_main(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
