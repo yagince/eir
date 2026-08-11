@@ -1112,7 +1112,7 @@ dependencies = [
 
 [[package]]
 name = "eir"
-version = "0.17.6"
+version = "0.17.7"
 dependencies = [
  "chrono",
  "image",
