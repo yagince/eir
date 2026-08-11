@@ -32,13 +32,9 @@ Grab the latest build for your OS from the [Releases page](https://github.com/ya
 - Apple Silicon (M1/M2/M3/M4): `eir_<version>_aarch64.dmg`
 - Intel: `eir_<version>_x64.dmg`
 
-Open the DMG and drag **eir.app** into `/Applications`. The bundle is ad-hoc signed (no Apple Developer ID yet), so on first launch Gatekeeper refuses with `"eir.app" is damaged and can't be opened`. Remove the quarantine attribute once:
+Open the DMG, drag **eir.app** into `/Applications`, and launch it. Builds from v0.17.6 onward are signed with an Apple Developer ID and notarized, so Gatekeeper accepts them as-is.
 
-```bash
-xattr -rd com.apple.quarantine /Applications/eir.app
-```
-
-Then launch it normally. Subsequent launches — including after the in-app updater swaps the binary — don't need this step.
+Upgrading from v0.17.5 or earlier? Those bundles were ad-hoc signed, which made Gatekeeper report `"eir.app" is damaged and can't be opened` on first launch and left the in-app updater unable to relaunch the app after installing an update. Both are fixed — replace the old copy with this DMG once, and updates from then on install and relaunch on their own.
 
 ### Windows
 
