@@ -37,7 +37,6 @@
     loadUnreadOnly,
     loadViewMode,
     loadWatchedOrgs,
-    normalizeRepoSettingsInput,
     persistHiddenItems,
     persistIncludeIssues,
     persistIncludePRs,
@@ -55,6 +54,12 @@
     type Theme,
   } from "$lib/storage";
   import type { NotificationItem, Tab, ViewMode, WatchedItem } from "$lib/types";
+  import {
+    type ImportedSettings,
+    parseImportedSettings,
+    SETTINGS_EXPORT_VERSION,
+    type SettingsExport,
+  } from "$lib/settings-import";
   import { dispatchShortcut, isEditableTarget, type Shortcut } from "$lib/shortcuts";
   import Auth from "$lib/components/Auth.svelte";
   import ItemList from "$lib/components/ItemList.svelte";
@@ -136,8 +141,14 @@
   // `actionPerformed` event that `onAction` listens for (that wiring only
   // exists on iOS/Android). So to handle clicks we create the Notification
   // ourselves and attach `.onclick` directly.
-  function showNotification(title: string, body: string, url?: string, onClick?: () => void) {
+  /// `onClick` wins over `url` when both are given.
+  function showNotification(
+    title: string,
+    body: string,
+    onActivate: { url?: string; onClick?: () => void } = {},
+  ) {
     const n = new Notification(title, { body });
+    const { url, onClick } = onActivate;
     if (onClick || url) {
       n.addEventListener("click", () => {
         if (onClick) onClick();
@@ -386,12 +397,13 @@
           showNotification(
             "eir update available",
             `Version ${update.version} is ready to install.`,
-            undefined,
-            // Land them on the popup, where the banner offers the install in
-            // one click. macOS suppresses these banners while eir is
-            // frontmost and they vanish quickly regardless, so the popup
-            // banner — not this notification — is the durable signal.
-            () => void invoke("show_popup"),
+            {
+              // Land them on the popup, where the banner offers the install in
+              // one click. macOS suppresses these banners while eir is
+              // frontmost and they vanish quickly regardless, so the popup
+              // banner — not this notification — is the durable signal.
+              onClick: () => void invoke("show_popup"),
+            },
           );
         }
       }
@@ -472,11 +484,9 @@
         "OS notification permission not granted. Check System Settings → Notifications → eir.";
       return;
     }
-    showNotification(
-      "eir test notification",
-      "Click to open the eir repo.",
-      "https://github.com/yagince/eir",
-    );
+    showNotification("eir test notification", "Click to open the eir repo.", {
+      url: "https://github.com/yagince/eir",
+    });
   }
 
   async function ensureNotificationPermission(): Promise<boolean> {
@@ -1011,26 +1021,6 @@
     }
   }
 
-  const SETTINGS_EXPORT_VERSION = 1;
-
-  type SettingsExport = {
-    version: number;
-    refreshMs?: number;
-    notifyEnabled?: boolean;
-    showLatestComment?: boolean;
-    includePRs?: boolean;
-    includeIssues?: boolean;
-    theme?: Theme;
-    /// Pre-per-repo builds wrote this string array; kept on the import side
-    /// so a re-import doesn't silently lose someone's exclusion list.
-    excludedRepos?: string[];
-    repoSettings?: Record<string, RepoSetting>;
-    watchedOrgs?: string[];
-    hiddenItems?: number[];
-    pinnedItems?: number[];
-    toggleShortcut?: string;
-  };
-
   function buildSettingsExport(): SettingsExport {
     return {
       version: SETTINGS_EXPORT_VERSION,
@@ -1095,110 +1085,103 @@
     });
   }
 
-  function applyImportedSettings(raw: unknown, sourcePath?: string) {
-    if (!raw || typeof raw !== "object") {
-      throw new Error("not a JSON object");
-    }
-    const data = raw as Partial<SettingsExport>;
-    if (data.version !== SETTINGS_EXPORT_VERSION) {
-      throw new Error(
-        `unsupported version: ${data.version ?? "missing"} (expected ${SETTINGS_EXPORT_VERSION})`,
-      );
-    }
-
-    const applied: string[] = [];
-
-    if (typeof data.refreshMs === "number" && data.refreshMs >= 5_000) {
-      onIntervalChange(data.refreshMs);
+  /// Scalar preferences. Each applier records the labels it applied on the
+  /// shared list so the caller can report what landed.
+  function applyImportedToggles(parsed: ImportedSettings, applied: string[]) {
+    if (parsed.refreshMs !== undefined) {
+      onIntervalChange(parsed.refreshMs);
       applied.push("refresh interval");
     }
 
-    if (typeof data.notifyEnabled === "boolean") {
-      onNotifyChange(data.notifyEnabled);
+    if (parsed.notifyEnabled !== undefined) {
+      onNotifyChange(parsed.notifyEnabled);
       applied.push("notifications");
     }
 
-    if (typeof data.showLatestComment === "boolean") {
-      onShowLatestCommentChange(data.showLatestComment);
+    if (parsed.showLatestComment !== undefined) {
+      onShowLatestCommentChange(parsed.showLatestComment);
       applied.push("latest comment preview");
     }
 
-    // Apply include flags raw (skipping the both-off guard in the change
-    // handlers) so a valid export with both true / one true survives, and a
-    // (defensive) both-false case falls through to the next field rather than
-    // mutating state — pushFullConfig at the end re-syncs the worker either
-    // way.
-    const nextIncludePRs = typeof data.includePRs === "boolean" ? data.includePRs : includePRs;
-    const nextIncludeIssues =
-      typeof data.includeIssues === "boolean" ? data.includeIssues : includeIssues;
+    // Applied raw, skipping the both-off guard in the change handlers, so an
+    // export with either flag set survives while a (defensive) both-false case
+    // is left alone rather than mutating state — pushFullConfig re-syncs the
+    // worker either way.
+    const nextIncludePRs = parsed.includePRs ?? includePRs;
+    const nextIncludeIssues = parsed.includeIssues ?? includeIssues;
     if (nextIncludePRs || nextIncludeIssues) {
-      if (typeof data.includePRs === "boolean" && data.includePRs !== includePRs) {
-        includePRs = data.includePRs;
-        persistIncludePRs(data.includePRs);
+      if (parsed.includePRs !== undefined && parsed.includePRs !== includePRs) {
+        includePRs = parsed.includePRs;
+        persistIncludePRs(parsed.includePRs);
         applied.push("include PRs");
       }
-      if (typeof data.includeIssues === "boolean" && data.includeIssues !== includeIssues) {
-        includeIssues = data.includeIssues;
-        persistIncludeIssues(data.includeIssues);
+      if (parsed.includeIssues !== undefined && parsed.includeIssues !== includeIssues) {
+        includeIssues = parsed.includeIssues;
+        persistIncludeIssues(parsed.includeIssues);
         applied.push("include Issues");
       }
     }
 
-    if (data.theme === "system" || data.theme === "light" || data.theme === "dark") {
-      onThemeChange(data.theme);
+    if (parsed.theme !== undefined) {
+      onThemeChange(parsed.theme);
       applied.push("theme");
     }
+  }
 
-    if (data.repoSettings !== undefined || data.excludedRepos !== undefined) {
-      const next = normalizeRepoSettingsInput(data.repoSettings, data.excludedRepos);
+  /// The list-shaped settings, which all replace their collection wholesale —
+  /// an empty list in the file is a deliberate "clear this".
+  function applyImportedCollections(parsed: ImportedSettings, applied: string[]) {
+    if (parsed.repoSettings !== undefined) {
       repoSettings.clear();
-      for (const [repo, s] of Object.entries(next)) {
+      for (const [repo, s] of Object.entries(parsed.repoSettings)) {
         repoSettings.set(repo, s);
       }
       persistRepoSettings(snapshotRepoSettings());
       applied.push("repo overrides");
     }
 
-    if (Array.isArray(data.watchedOrgs)) {
-      const next = data.watchedOrgs.filter(
-        (o): o is string => typeof o === "string" && o.length > 0,
-      );
+    if (parsed.watchedOrgs !== undefined) {
       watchedOrgs.clear();
-      for (const o of next) watchedOrgs.add(o);
+      for (const o of parsed.watchedOrgs) watchedOrgs.add(o);
       persistWatchedOrgs(watchedOrgs);
       applied.push("watched orgs");
     }
 
-    if (Array.isArray(data.hiddenItems)) {
-      const next = data.hiddenItems.filter(
-        (n): n is number => typeof n === "number" && Number.isFinite(n),
-      );
+    if (parsed.hiddenItems !== undefined) {
       hiddenItems.clear();
-      for (const n of next) hiddenItems.add(n);
+      for (const n of parsed.hiddenItems) hiddenItems.add(n);
       persistHiddenItems(hiddenItems);
       applied.push("hidden items");
     }
 
-    if (Array.isArray(data.pinnedItems)) {
-      const next = data.pinnedItems.filter(
-        (n): n is number => typeof n === "number" && Number.isFinite(n),
-      );
+    if (parsed.pinnedItems !== undefined) {
       pinnedItems.clear();
-      for (const n of next) pinnedItems.add(n);
+      for (const n of parsed.pinnedItems) pinnedItems.add(n);
       persistPinnedItems(pinnedItems);
       applied.push("pinned items");
     }
 
-    if (typeof data.toggleShortcut === "string" && data.toggleShortcut) {
-      void invoke("set_toggle_shortcut", { shortcut: data.toggleShortcut })
+    const shortcut = parsed.toggleShortcut;
+    if (shortcut !== undefined) {
+      // Rust owns whether the combo can actually be registered, so the local
+      // state only follows once it accepts.
+      void invoke("set_toggle_shortcut", { shortcut })
         .then(() => {
-          toggleShortcut = data.toggleShortcut as string;
+          toggleShortcut = shortcut;
         })
         .catch((err) => {
           console.warn("[eir] import: shortcut rejected:", err);
         });
       applied.push("toggle shortcut");
     }
+  }
+
+  function applyImportedSettings(raw: unknown, sourcePath?: string) {
+    const parsed = parseImportedSettings(raw);
+    const applied: string[] = [];
+
+    applyImportedToggles(parsed, applied);
+    applyImportedCollections(parsed, applied);
 
     void pushFullConfig();
 
@@ -1210,7 +1193,10 @@
         : `Nothing to import${suffix}.`;
   }
 
-  const repoSuggestions = $derived(repoSuggestionsFrom(items, new Set(repoSettings.keys())));
+  const repoSuggestions = $derived.by(() => {
+    const overridden = new Set(repoSettings.keys());
+    return repoSuggestionsFrom(items, overridden);
+  });
 
   const orgSuggestions = $derived.by<string[]>(() => {
     const seen = new Set<string>();
