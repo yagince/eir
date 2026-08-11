@@ -198,6 +198,22 @@
     return Number.isFinite(n) && n >= 0 && n <= max ? n : null;
   }
 
+  /// Whether the field holds anything at all.
+  ///
+  /// Deliberately not a truthiness check. The hour and minute are bound to
+  /// `<input type="number">`, so Svelte hands back numbers, and a legitimate 0 —
+  /// any :00, or midnight — is falsy. Reading that as "still blank" suppressed
+  /// the "Pick a future time." message in exactly the case that needs it: a past
+  /// time picked on the hour, where the Snooze button disables itself and the
+  /// user is left with no explanation.
+  function isFilled(value: unknown): boolean {
+    return value !== "" && value !== null && value !== undefined;
+  }
+
+  function customFieldsFilled(): boolean {
+    return isFilled(customDate) && isFilled(customHourStr) && isFilled(customMinuteStr);
+  }
+
   /// Seed both pickers with "1 hour from now" so opening custom mode lets
   /// the user nudge a sensible default rather than type from scratch.
   function seedCustomDefaults() {
@@ -754,7 +770,7 @@
                               </div>
                             </label>
                           </div>
-                          {#if customUntilSec() == null && customDate && customHourStr && customMinuteStr}
+                          {#if customUntilSec() == null && customFieldsFilled()}
                             <div class="snooze-custom-error">Pick a future time.</div>
                           {/if}
                           <div class="snooze-custom-actions">
