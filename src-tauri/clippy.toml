@@ -1,7 +1,7 @@
 # Stricter than clippy's default of 25. Note this is *cognitive* complexity,
 # which weights nesting rather than counting branches, so the number is not
-# comparable to the frontend's cyclomatic `complexity: max 10` in .oxlintrc.json.
+# directly comparable to the frontend's cyclomatic `complexity: max 10` in
+# .oxlintrc.json even though both now read 10.
 #
-# Nothing is exempted at 20, test modules included. Going to 15 would leave only
-# run_cycle (19), whose remaining weight is the fetch-and-error-handling phase.
-cognitive-complexity-threshold = 20
+# Nothing is exempted, test modules included.
+cognitive-complexity-threshold = 10

@@ -2295,20 +2295,36 @@ mod tests {
             make_item_ref("owner2/repo2", "issue", 20),
         ]);
 
-        // Each item gets its own aliased variables.
-        assert!(query.contains("$o0: String!, $n0: String!"));
-        assert!(query.contains("$o1: String!, $n1: String!"));
-        // Aliased repositories using those variables.
-        assert!(query.contains("i0: repository(owner: $o0, name: $n0)"));
-        assert!(query.contains("i1: repository(owner: $o1, name: $n1)"));
-        // Sub-selection differs by kind.
-        assert!(query.contains("pullRequest(number: 10) { state }"));
-        assert!(query.contains("issue(number: 20) { state }"));
+        for fragment in [
+            // Each item gets its own aliased variables,
+            "$o0: String!, $n0: String!",
+            "$o1: String!, $n1: String!",
+            // aliased repositories using those variables,
+            "i0: repository(owner: $o0, name: $n0)",
+            "i1: repository(owner: $o1, name: $n1)",
+            // and a sub-selection that differs by kind.
+            "pullRequest(number: 10) { state }",
+            "issue(number: 20) { state }",
+        ] {
+            assert!(
+                query.contains(fragment),
+                "query missing {fragment:?}:\n{query}"
+            );
+        }
+
         // Variables carry the owner/name values.
-        assert_eq!(variables.get("o0").and_then(|v| v.as_str()), Some("owner1"));
-        assert_eq!(variables.get("n0").and_then(|v| v.as_str()), Some("repo1"));
-        assert_eq!(variables.get("o1").and_then(|v| v.as_str()), Some("owner2"));
-        assert_eq!(variables.get("n1").and_then(|v| v.as_str()), Some("repo2"));
+        for (key, want) in [
+            ("o0", "owner1"),
+            ("n0", "repo1"),
+            ("o1", "owner2"),
+            ("n1", "repo2"),
+        ] {
+            assert_eq!(
+                variables.get(key).and_then(|v| v.as_str()),
+                Some(want),
+                "variable {key}"
+            );
+        }
     }
 
     #[test]

@@ -544,6 +544,83 @@ async fn notify_removed(
     }
 }
 
+/// Write one half of a progressive fetch and push it to the UI, unless the
+/// config moved on while the fetch was in flight. Skipping the stale write is
+/// what stops old-tab items from flashing into the new-tab popup.
+fn emit_partial(
+    app: &AppHandle,
+    handle: &BackgroundHandle,
+    generation: u64,
+    write: impl FnOnce(&mut BackgroundState),
+) {
+    let applied = handle.with_state(|s| {
+        if s.config_generation != generation {
+            return false;
+        }
+        write(s);
+        true
+    });
+    if applied {
+        emit_state(app, handle);
+    }
+}
+
+/// Which error message to report when a cycle is abandoned over a 401. Prefers
+/// the call that actually 401'd over one that failed for another reason.
+fn unauthorized_message(
+    items_res: &Result<Vec<WatchedItem>, GithubError>,
+    notifs_res: &Result<Vec<NotificationItem>, GithubError>,
+) -> String {
+    match (items_res, notifs_res) {
+        (Err(e), _) if e.is_unauthorized => e.message.clone(),
+        (_, Err(e)) => e.message.clone(),
+        _ => "unauthorized".into(),
+    }
+}
+
+/// Deal with a 401 from either fetch. Returns whether the cycle is over.
+///
+/// One 401 is not proof the token is dead: GitHub has returned transient ones
+/// (2026-07-13: notifications 401'd while the search call in the same cycle
+/// succeeded), and clearing on a single one signs the user out spuriously. So
+/// the token is re-verified first, and both outcomes are logged so the
+/// diagnostics log shows whether the 401 hit one call or both.
+async fn handle_unauthorized(
+    app: &AppHandle,
+    handle: &BackgroundHandle,
+    octo: &octocrab::Octocrab,
+    items_res: &Result<Vec<WatchedItem>, GithubError>,
+    notifs_res: &Result<Vec<NotificationItem>, GithubError>,
+) -> bool {
+    let items_401 = matches!(items_res, Err(e) if e.is_unauthorized);
+    let notifs_401 = matches!(notifs_res, Err(e) if e.is_unauthorized);
+    if !items_401 && !notifs_401 {
+        return false;
+    }
+
+    let which = if items_401 {
+        "fetch_watched"
+    } else {
+        "fetch_notifications"
+    };
+    crate::diagnostics::log(&format!(
+        "401 in background cycle: fetch_watched={} fetch_notifications={}",
+        fetch_outcome(items_res),
+        fetch_outcome(notifs_res),
+    ));
+
+    let auth = app.state::<Mutex<AppState>>();
+    if clear_token_if_dead(&auth, octo, &format!("background {which}")).await {
+        handle.with_state(|s| s.reset_session(Some("not_authenticated".into())));
+        emit_state(app, handle);
+        update_tray_badge(app, handle);
+        return true;
+    }
+
+    fail_cycle(app, handle, unauthorized_message(items_res, notifs_res));
+    true
+}
+
 async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
     // Pull the current token off AppState. No token = sign-in required, and
     // we clear cached state without emitting the "loading" prelude because
@@ -637,64 +714,17 @@ async fn run_cycle(app: &AppHandle, handle: &BackgroundHandle) {
             include_issues,
         ),
         fetch_notifications_with(&octo),
-        |items| {
-            let applied = handle.with_state(|s| {
-                if s.config_generation != generation {
-                    return false;
-                }
-                s.items = items.clone();
-                true
-            });
-            if applied {
-                emit_state(app, handle);
-            }
-        },
+        |items| emit_partial(app, handle, generation, |s| s.items = items.clone()),
         |notifs| {
-            let applied = handle.with_state(|s| {
-                if s.config_generation != generation {
-                    return false;
-                }
+            emit_partial(app, handle, generation, |s| {
                 s.notifications = notifs.clone();
-                true
             });
-            if applied {
-                emit_state(app, handle);
-            }
         },
     )
     .await;
 
-    // 401 on either call → re-verify the token before treating it as dead.
-    // GitHub has returned transient 401s here (2026-07-13: notifications
-    // 401'd while the search call in the same cycle succeeded), and clearing
-    // on a single one signs the user out spuriously. Both outcomes are logged
-    // so the diagnostics log shows whether the 401 hit one call or both.
-    let unauthorized = matches!(&items_res, Err(e) if e.is_unauthorized)
-        || matches!(&notifs_res, Err(e) if e.is_unauthorized);
-    if unauthorized {
-        let which = if matches!(&items_res, Err(e) if e.is_unauthorized) {
-            "fetch_watched"
-        } else {
-            "fetch_notifications"
-        };
-        crate::diagnostics::log(&format!(
-            "401 in background cycle: fetch_watched={} fetch_notifications={}",
-            fetch_outcome(&items_res),
-            fetch_outcome(&notifs_res),
-        ));
-        let auth = app.state::<Mutex<AppState>>();
-        if clear_token_if_dead(&auth, &octo, &format!("background {which}")).await {
-            handle.with_state(|s| s.reset_session(Some("not_authenticated".into())));
-            emit_state(app, handle);
-            update_tray_badge(app, handle);
-            return;
-        }
-        let message = match (&items_res, &notifs_res) {
-            (Err(e), _) if e.is_unauthorized => e.message.clone(),
-            (_, Err(e)) => e.message.clone(),
-            _ => "unauthorized".into(),
-        };
-        return fail_cycle(app, handle, message);
+    if handle_unauthorized(app, handle, &octo, &items_res, &notifs_res).await {
+        return;
     }
 
     let items = match items_res {
@@ -967,6 +997,49 @@ pub struct BackgroundConfig {
 /// re-fetch (tab / watched_orgs changed, or this is the first apply that
 /// unparks the worker); `badge_dirty` means a frontend-side filter changed
 /// and the tray badge needs a refresh.
+/// Overwrite `slot` when the patch carries a different value, reporting whether
+/// it changed. Absent fields and no-op writes both answer `false`, which is what
+/// keeps an unchanged push from invalidating diff anchors.
+fn take_changed<T: PartialEq>(slot: &mut T, patch: Option<T>) -> bool {
+    match patch {
+        Some(next) if next != *slot => {
+            *slot = next;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Drop the diff anchors and bump the generation. Every field that changes the
+/// *query* needs this: otherwise the next cycle diffs the new query's results
+/// against the old query's items and fires spurious "Closed" / "New in list"
+/// notifications, and an in-flight cycle's write-back can't tell it went stale.
+fn invalidate_query_anchors(s: &mut BackgroundState) {
+    s.has_loaded_once = false;
+    s.prev_items.clear();
+    s.prev_thread_updated_at.clear();
+    s.config_generation = s.config_generation.wrapping_add(1);
+}
+
+/// The include pair moves together because it shapes the search query. A patch
+/// that would leave both off is refused: the frontend already guards, but a
+/// malformed import shouldn't strand the worker with nothing to fetch.
+/// Reports whether a re-fetch is needed.
+fn apply_include_flags(s: &mut BackgroundState, prs: Option<bool>, issues: Option<bool>) -> bool {
+    let next_prs = prs.unwrap_or(s.include_prs);
+    let next_issues = issues.unwrap_or(s.include_issues);
+    if next_prs == s.include_prs && next_issues == s.include_issues {
+        return false;
+    }
+    if !next_prs && !next_issues {
+        return false;
+    }
+    s.include_prs = next_prs;
+    s.include_issues = next_issues;
+    invalidate_query_anchors(s);
+    true
+}
+
 fn apply_background_config(s: &mut BackgroundState, config: BackgroundConfig) -> (bool, bool) {
     // First push from the frontend always wakes the worker — the
     // main loop is parked on `config_applied` and the tab/orgs may
@@ -976,76 +1049,43 @@ fn apply_background_config(s: &mut BackgroundState, config: BackgroundConfig) ->
     s.config_applied = true;
     let mut trigger = first_apply;
     let mut badge_dirty = false;
-    if let Some(tab) = config.tab {
-        if tab != s.tab {
-            s.tab = tab;
-            s.has_loaded_once = false;
-            s.prev_items.clear();
-            s.prev_thread_updated_at.clear();
-            s.config_generation = s.config_generation.wrapping_add(1);
-            trigger = true;
-        }
+
+    if take_changed(&mut s.tab, config.tab) {
+        invalidate_query_anchors(s);
+        trigger = true;
     }
-    if let Some(orgs) = config.watched_orgs {
-        if orgs != s.watched_orgs {
-            s.watched_orgs = orgs;
-            s.has_loaded_once = false;
-            s.prev_items.clear();
-            s.prev_thread_updated_at.clear();
-            s.config_generation = s.config_generation.wrapping_add(1);
-            trigger = true;
-        }
+    if take_changed(&mut s.watched_orgs, config.watched_orgs) {
+        invalidate_query_anchors(s);
+        trigger = true;
     }
-    if let Some(next) = config.repo_settings {
-        // Every combination is kept, including {prs:true, issues:true}: with a
-        // global Include toggle off it widens that kind back in for the repo,
-        // and it keeps the override row visible in the UI. The map only changes
-        // on a genuine user edit, so this doesn't churn the generation.
-        if next != s.repo_settings {
-            // A widening override (global OFF + repo ON) changes the GraphQL
-            // query, not just the client-side filter — invalidate anchors and
-            // refetch. Pure narrowing changes pay this cost too; the savings
-            // weren't worth the extra book-keeping at human cadence.
-            s.repo_settings = next;
-            s.has_loaded_once = false;
-            s.prev_items.clear();
-            s.prev_thread_updated_at.clear();
-            s.config_generation = s.config_generation.wrapping_add(1);
-            trigger = true;
-            badge_dirty = true;
-        }
+    // Every override combination is kept, including {prs:true, issues:true}:
+    // with a global Include toggle off it widens that kind back in for the repo,
+    // and it keeps the override row visible in the UI. A widening override
+    // changes the GraphQL query rather than just the client-side filter, so it
+    // invalidates anchors; pure narrowing pays that cost too, since the savings
+    // weren't worth the book-keeping at human cadence.
+    if take_changed(&mut s.repo_settings, config.repo_settings) {
+        invalidate_query_anchors(s);
+        trigger = true;
+        badge_dirty = true;
     }
-    if let Some(hidden) = config.hidden_items {
-        let next: HashSet<u64> = hidden.into_iter().collect();
-        if next != s.hidden_items {
-            s.hidden_items = next;
-            badge_dirty = true;
-        }
+    // Hidden items are a frontend-side filter, so the query is untouched and
+    // only the badge needs recomputing.
+    let hidden = config.hidden_items.map(HashSet::from_iter);
+    if take_changed(&mut s.hidden_items, hidden) {
+        badge_dirty = true;
     }
+
     if let Some(notify) = config.notify_enabled {
         s.notify_enabled = notify;
     }
     if let Some(ms) = config.interval_ms {
         s.interval_ms = ms.max(MIN_INTERVAL_MS);
     }
-    // include_prs/include_issues change the search query — treat them like
-    // tab/watched_orgs: invalidate the diff anchors and bump the generation
-    // so an in-flight cycle's write-back can detect the staleness. Refuse a
-    // patch that would leave both off; the frontend already guards but a
-    // malformed import shouldn't strand the worker with nothing to fetch.
-    let next_include_prs = config.include_prs.unwrap_or(s.include_prs);
-    let next_include_issues = config.include_issues.unwrap_or(s.include_issues);
-    let include_dirty =
-        next_include_prs != s.include_prs || next_include_issues != s.include_issues;
-    if (next_include_prs || next_include_issues) && include_dirty {
-        s.include_prs = next_include_prs;
-        s.include_issues = next_include_issues;
-        s.has_loaded_once = false;
-        s.prev_items.clear();
-        s.prev_thread_updated_at.clear();
-        s.config_generation = s.config_generation.wrapping_add(1);
+    if apply_include_flags(s, config.include_prs, config.include_issues) {
         trigger = true;
     }
+
     (trigger, badge_dirty)
 }
 
@@ -1387,23 +1427,30 @@ mod notification_body_tests {
 
     #[test]
     fn reason_is_comment_event_rejects_non_comment_changes() {
-        // These are exactly the reasons the user complained about: CI,
-        // state, review-state, draft flips, the catch-all "Updated", and
-        // "New in list" must NOT pull in the comment body.
-        assert!(!reason_is_comment_event("Now merged"));
-        assert!(!reason_is_comment_event("Now closed"));
-        assert!(!reason_is_comment_event("CI failure"));
-        assert!(!reason_is_comment_event("CI success"));
-        assert!(!reason_is_comment_event("Ready for review"));
-        assert!(!reason_is_comment_event("Marked as draft"));
-        assert!(!reason_is_comment_event("alice approved"));
-        assert!(!reason_is_comment_event("Updated"));
-        assert!(!reason_is_comment_event("New in list"));
-        assert!(!reason_is_comment_event(""));
-        // A "+N" prefix without the literal `comment(s)` token must not
-        // misfire — guards against future reasons like "+2 reviews".
-        assert!(!reason_is_comment_event("+2 reviews"));
-        assert!(!reason_is_comment_event("+1"));
+        // These are exactly the reasons the user complained about: CI, state,
+        // review-state, draft flips, the catch-all "Updated", and "New in list"
+        // must NOT pull in the comment body. The trailing "+N" cases guard
+        // against a future reason like "+2 reviews" matching on the prefix
+        // alone, without the literal `comment(s)` token.
+        for reason in [
+            "Now merged",
+            "Now closed",
+            "CI failure",
+            "CI success",
+            "Ready for review",
+            "Marked as draft",
+            "alice approved",
+            "Updated",
+            "New in list",
+            "",
+            "+2 reviews",
+            "+1",
+        ] {
+            assert!(
+                !reason_is_comment_event(reason),
+                "should not be treated as a comment event: {reason:?}"
+            );
+        }
     }
 
     #[test]
