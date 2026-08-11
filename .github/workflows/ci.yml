@@ -4,14 +4,14 @@ on:
   push:
     branches: [main]
     paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'assets/**'
+      - "**.md"
+      - "docs/**"
+      - "assets/**"
   pull_request:
     paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'assets/**'
+      - "**.md"
+      - "docs/**"
+      - "assets/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -34,6 +34,15 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      # oxlint reaches the <script> blocks and the .ts modules but not Svelte
+      # template syntax, so it complements svelte-check (which is what covers
+      # template types and a11y) rather than replacing it.
+      - name: oxlint
+        run: pnpm lint
+
+      - name: oxfmt
+        run: pnpm format:check
 
       - name: svelte-check
         run: pnpm check
