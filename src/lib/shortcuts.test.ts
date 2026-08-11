@@ -1,11 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
-import {
-  dispatchShortcut,
-  isTextCaretTarget,
-  matchShortcut,
-  type Shortcut,
-} from "./shortcuts";
+import { dispatchShortcut, isTextCaretTarget, matchShortcut, type Shortcut } from "./shortcuts";
 
 function input(): HTMLElement {
   return { tagName: "INPUT" } as HTMLElement;
@@ -122,9 +117,7 @@ describe("dispatchShortcut", () => {
   it("runs allowInInput shortcuts even from a text field", () => {
     const run = vi.fn();
     const e = event(",", { metaKey: true, target: input() });
-    const handled = dispatchShortcut(e, [
-      { key: ",", mods: ["cmd"], allowInInput: true, run },
-    ]);
+    const handled = dispatchShortcut(e, [{ key: ",", mods: ["cmd"], allowInInput: true, run }]);
     expect(handled).toBe(true);
     expect(run).toHaveBeenCalledOnce();
   });

@@ -1,12 +1,6 @@
 <script lang="ts">
   import { flattenCommentBody, itemKey, relativeTime } from "$lib/list";
-  import type {
-    NotificationItem,
-    RepoGroup,
-    Tab,
-    ViewMode,
-    WatchedItem,
-  } from "$lib/types";
+  import type { NotificationItem, RepoGroup, Tab, ViewMode, WatchedItem } from "$lib/types";
 
   type Props = {
     loading: boolean;
@@ -176,10 +170,8 @@
     );
     if (buttons.length === 0) return;
     const active = document.activeElement;
-    const idx =
-      active instanceof HTMLButtonElement ? buttons.indexOf(active) : -1;
-    const next =
-      idx === -1 ? 0 : (idx + delta + buttons.length) % buttons.length;
+    const idx = active instanceof HTMLButtonElement ? buttons.indexOf(active) : -1;
+    const next = idx === -1 ? 0 : (idx + delta + buttons.length) % buttons.length;
     buttons[next].focus();
   }
 
@@ -239,15 +231,7 @@
   /// matches what users expect when snoozing late at night.
   function nextMorningEightSec(): number {
     const d = new Date();
-    const target = new Date(
-      d.getFullYear(),
-      d.getMonth(),
-      d.getDate(),
-      8,
-      0,
-      0,
-      0,
-    );
+    const target = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 8, 0, 0, 0);
     if (target.getTime() <= d.getTime()) {
       target.setDate(target.getDate() + 1);
     }
@@ -338,12 +322,7 @@
 </script>
 
 <header class="toolbar">
-  <button
-    class="refresh"
-    onclick={onRefresh}
-    disabled={loading}
-    title="Refresh (⌘R)"
-  >
+  <button class="refresh" onclick={onRefresh} disabled={loading} title="Refresh (⌘R)">
     {loading ? "Refreshing…" : "Refresh"}
   </button>
   {#if visibleUnreadCount > 0}
@@ -367,12 +346,7 @@
       </svg>
     </button>
   {/if}
-  <button
-    class="icon-btn"
-    onclick={onShowSettings}
-    title="Settings (⌘,)"
-    aria-label="Settings"
-  >
+  <button class="icon-btn" onclick={onShowSettings} title="Settings (⌘,)" aria-label="Settings">
     <svg
       viewBox="0 0 24 24"
       fill="none"
@@ -392,11 +366,7 @@
 </header>
 <nav class="tabs">
   {#each tabs as tab (tab.id)}
-    <button
-      class="tab"
-      class:active={activeTab === tab.id}
-      onclick={() => onSwitchTab(tab.id)}
-    >
+    <button class="tab" class:active={activeTab === tab.id} onclick={() => onSwitchTab(tab.id)}>
       {tab.label}
     </button>
   {/each}
@@ -407,7 +377,9 @@
     class:active={unreadOnly}
     onclick={onToggleUnreadOnly}
     aria-pressed={unreadOnly}
-    title={unreadOnly ? "Showing unread only — click or press U to show all" : "Show only unread items (U)"}
+    title={unreadOnly
+      ? "Showing unread only — click or press U to show all"
+      : "Show only unread items (U)"}
   >
     <span class="filter-dot" aria-hidden="true"></span>
     <span class="filter-label">Unread only</span>
@@ -415,12 +387,7 @@
       <span class="filter-x" aria-hidden="true">×</span>
     {/if}
   </button>
-  <div
-    class="view-toggle"
-    role="group"
-    aria-label="View mode"
-    title="Toggle list view (R)"
-  >
+  <div class="view-toggle" role="group" aria-label="View mode" title="Toggle list view (R)">
     {#each VIEW_MODES as mode (mode.id)}
       <button
         class="view-toggle-btn"
@@ -499,11 +466,7 @@
 {:else}
   <ul class="list" class:dim={loading}>
     {#each groups as group (group.kind ?? group.repo)}
-      <li
-        class="group"
-        class:pinned={group.kind === "pinned"}
-        class:flat={group.kind === "flat"}
-      >
+      <li class="group" class:pinned={group.kind === "pinned"} class:flat={group.kind === "flat"}>
         {#if group.kind !== "flat"}
           <div class="group-header" class:pinned-header={group.kind === "pinned"}>
             <span class="group-repo">
@@ -554,12 +517,7 @@
                       <span class="repo-chip" title={item.repo}>{item.repo}</span>
                       <span class="sep">·</span>
                     {/if}
-                    <img
-                      class="avatar"
-                      src={item.author_avatar}
-                      alt=""
-                      loading="lazy"
-                    />
+                    <img class="avatar" src={item.author_avatar} alt="" loading="lazy" />
                     <span class="author">{item.author}</span>
                     <span class="sep">·</span>
                     <span>#{item.number}</span>
@@ -573,10 +531,7 @@
                     {/if}
                     {#if item.ci_status && item.ci_status !== "unknown"}
                       <span class="sep">·</span>
-                      <span
-                        class="ci ci-{item.ci_status}"
-                        title="CI: {item.ci_status}"
-                      >
+                      <span class="ci ci-{item.ci_status}" title="CI: {item.ci_status}">
                         {#if item.ci_status === "success"}✓{:else if item.ci_status === "failure" || item.ci_status === "error"}✗{:else}⏱{/if}
                       </span>
                     {/if}
@@ -585,10 +540,9 @@
                       <span
                         class="snooze-chip"
                         title={"Snoozed until " +
-                          new Date(snoozedUntil[item.id] * 1000).toLocaleString(
-                            undefined,
-                            { hour12: false },
-                          )}
+                          new Date(snoozedUntil[item.id] * 1000).toLocaleString(undefined, {
+                            hour12: false,
+                          })}
                       >
                         💤 {snoozeLabel(snoozedUntil[item.id], nowSec)}
                       </span>
@@ -638,18 +592,11 @@
                     </span>
                   {/if}
                   {#if showLatestComment && notificationsByKey.has(itemKey(item)) && item.latest_comment}
-                    {@const flat = flattenCommentBody(
-                      item.latest_comment.body_text,
-                    )}
+                    {@const flat = flattenCommentBody(item.latest_comment.body_text)}
                     {#if flat.length > 0}
-                      <span
-                        class="latest-comment"
-                        title={item.latest_comment.body_text}
-                      >
+                      <span class="latest-comment" title={item.latest_comment.body_text}>
                         <span class="latest-comment-clamp">
-                          <span class="latest-comment-author"
-                            >@{item.latest_comment.author}</span
-                          >
+                          <span class="latest-comment-author">@{item.latest_comment.author}</span>
                           {flat}
                         </span>
                       </span>
@@ -677,9 +624,7 @@
                   >
                     <svg
                       viewBox="0 0 24 24"
-                      fill={pinnedItems.has(item.id)
-                        ? "currentColor"
-                        : "none"}
+                      fill={pinnedItems.has(item.id) ? "currentColor" : "none"}
                       stroke="currentColor"
                       stroke-width="2"
                       stroke-linecap="round"
@@ -766,9 +711,7 @@
                             </button>
                           {/if}
                         {:else}
-                          <div class="snooze-custom-header">
-                            Wake at
-                          </div>
+                          <div class="snooze-custom-header">Wake at</div>
                           <div class="snooze-custom-fields">
                             <label class="snooze-custom-field">
                               <span>Date</span>
@@ -807,9 +750,7 @@
                             </label>
                           </div>
                           {#if customUntilSec() == null && customDate && customHourStr && customMinuteStr}
-                            <div class="snooze-custom-error">
-                              Pick a future time.
-                            </div>
+                            <div class="snooze-custom-error">Pick a future time.</div>
                           {/if}
                           <div class="snooze-custom-actions">
                             <button

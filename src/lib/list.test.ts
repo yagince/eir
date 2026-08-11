@@ -55,9 +55,7 @@ describe("relativeTime", () => {
 describe("itemKey", () => {
   it("joins repo, kind and number", () => {
     expect(itemKey({ repo: "o/r", kind: "pr", number: 7 })).toBe("o/r:pr:7");
-    expect(itemKey({ repo: "o/r", kind: "issue", number: 3 })).toBe(
-      "o/r:issue:3",
-    );
+    expect(itemKey({ repo: "o/r", kind: "issue", number: 3 })).toBe("o/r:issue:3");
   });
 });
 
@@ -380,9 +378,7 @@ describe("flattenCommentBody", () => {
   });
 
   it("strips fenced code blocks", () => {
-    expect(flattenCommentBody("before\n```ts\ncode()\n```\nafter")).toBe(
-      "before after",
-    );
+    expect(flattenCommentBody("before\n```ts\ncode()\n```\nafter")).toBe("before after");
   });
 
   it("suppresses content after an unclosed fence", () => {

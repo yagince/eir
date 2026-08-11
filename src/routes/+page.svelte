@@ -3,10 +3,7 @@
   import { getVersion } from "@tauri-apps/api/app";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import {
-    isPermissionGranted,
-    requestPermission,
-  } from "@tauri-apps/plugin-notification";
+  import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
   import { relaunch } from "@tauri-apps/plugin-process";
   import { check as checkForUpdate, Update } from "@tauri-apps/plugin-updater";
   import { ask, message, open, save } from "@tauri-apps/plugin-dialog";
@@ -109,9 +106,7 @@
   let includePRs = $state<boolean>(loadIncludePRs());
   let includeIssues = $state<boolean>(loadIncludeIssues());
   let theme = $state<Theme>(loadTheme());
-  let systemDark = $state<boolean>(
-    window.matchMedia("(prefers-color-scheme: dark)").matches,
-  );
+  let systemDark = $state<boolean>(window.matchMedia("(prefers-color-scheme: dark)").matches);
   let notifications = $state<NotificationItem[]>([]);
   // Item-id → unix epoch seconds the snooze expires at. Mirrored from the
   // Rust worker via `state-updated`; the frontend never writes to this map
@@ -141,12 +136,7 @@
   // `actionPerformed` event that `onAction` listens for (that wiring only
   // exists on iOS/Android). So to handle clicks we create the Notification
   // ourselves and attach `.onclick` directly.
-  function showNotification(
-    title: string,
-    body: string,
-    url?: string,
-    onClick?: () => void,
-  ) {
+  function showNotification(title: string, body: string, url?: string, onClick?: () => void) {
     const n = new Notification(title, { body });
     if (onClick || url) {
       n.addEventListener("click", () => {
@@ -178,9 +168,7 @@
   let appVersion = $state<string>("");
   let autostartEnabled = $state<boolean | null>(null);
   let diagnosticsEnabled = $state<boolean>(false);
-  const repoSettings = new SvelteMap<string, RepoSetting>(
-    Object.entries(loadRepoSettings()),
-  );
+  const repoSettings = new SvelteMap<string, RepoSetting>(Object.entries(loadRepoSettings()));
   const hiddenItems = new SvelteSet<number>(loadHiddenItems());
   const pinnedItems = new SvelteSet<number>(loadPinnedItems());
   const watchedOrgs = new SvelteSet<string>(loadWatchedOrgs());
@@ -201,8 +189,7 @@
   let snoozeTickTimer: ReturnType<typeof setInterval> | null = null;
 
   $effect(() => {
-    const resolved =
-      theme === "system" ? (systemDark ? "dark" : "light") : theme;
+    const resolved = theme === "system" ? (systemDark ? "dark" : "light") : theme;
     document.documentElement.setAttribute("data-theme", resolved);
   });
 
@@ -277,9 +264,7 @@
       phase = "idle";
     }
     error =
-      payload.last_error && payload.last_error !== "not_authenticated"
-        ? payload.last_error
-        : null;
+      payload.last_error && payload.last_error !== "not_authenticated" ? payload.last_error : null;
   }
 
   // `hidden` is a client-side filter; the worker queries with "all" and the
@@ -328,9 +313,7 @@
   }
 
   function triggerRefresh() {
-    void invoke("trigger_refresh").catch((e) =>
-      console.warn("[eir] trigger_refresh failed:", e),
-    );
+    void invoke("trigger_refresh").catch((e) => console.warn("[eir] trigger_refresh failed:", e));
   }
 
   async function toggleAutostart(enabled: boolean) {
@@ -374,8 +357,7 @@
   }
 
   async function runUpdateCheck(opts: { interactive: boolean }) {
-    if (updateStatus.kind === "checking" || updateStatus.kind === "downloading")
-      return;
+    if (updateStatus.kind === "checking" || updateStatus.kind === "downloading") return;
     // Stamped before the attempt, not after, so a failing check (offline) still
     // backs off instead of retrying on every popup open.
     lastUpdateCheckAt = Date.now();
@@ -387,10 +369,10 @@
         console.info("[eir] update check: already latest");
         if (opts.interactive) {
           await withPinnedWindow(() =>
-            message(
-              `You're on the latest version${appVersion ? ` (v${appVersion})` : ""}.`,
-              { title: "eir", kind: "info" },
-            ),
+            message(`You're on the latest version${appVersion ? ` (v${appVersion})` : ""}.`, {
+              title: "eir",
+              kind: "info",
+            }),
           );
         }
         return;
@@ -426,10 +408,7 @@
       // Skip once an update is already on deck — re-checking would just
       // re-fire the same notification and clobber the user's in-progress
       // install state.
-      if (
-        updateStatus.kind === "available" ||
-        updateStatus.kind === "downloading"
-      ) {
+      if (updateStatus.kind === "available" || updateStatus.kind === "downloading") {
         return;
       }
       void runUpdateCheck({ interactive: false });
@@ -468,8 +447,7 @@
 
   // Which banner, if any, belongs at the top of the popup.
   const updateBanner = $derived.by(() => {
-    if (updateStatus.kind === "downloading")
-      return { state: "downloading" as const };
+    if (updateStatus.kind === "downloading") return { state: "downloading" as const };
     if (updateInstallError) return { state: "failed" as const };
     if (
       updateStatus.kind === "available" &&
@@ -693,8 +671,7 @@
       run: () => {
         if (selectedId == null) return;
         // Toggle: pressing `s` again on the same row closes the menu.
-        snoozeMenuOpenId =
-          snoozeMenuOpenId === selectedId ? null : selectedId;
+        snoozeMenuOpenId = snoozeMenuOpenId === selectedId ? null : selectedId;
       },
     },
     {
@@ -858,9 +835,7 @@
   async function openItem(item: WatchedItem) {
     void openUrl(item.url);
     const matching = notificationsByKey.get(itemKey(item)) ?? [];
-    await clearNotificationThreads(
-      new Set(matching.map((n) => n.thread_id)),
-    );
+    await clearNotificationThreads(new Set(matching.map((n) => n.thread_id)));
   }
 
   async function markAllVisibleAsRead() {
@@ -1153,45 +1128,29 @@
     // (defensive) both-false case falls through to the next field rather than
     // mutating state — pushFullConfig at the end re-syncs the worker either
     // way.
-    const nextIncludePRs =
-      typeof data.includePRs === "boolean" ? data.includePRs : includePRs;
+    const nextIncludePRs = typeof data.includePRs === "boolean" ? data.includePRs : includePRs;
     const nextIncludeIssues =
-      typeof data.includeIssues === "boolean"
-        ? data.includeIssues
-        : includeIssues;
+      typeof data.includeIssues === "boolean" ? data.includeIssues : includeIssues;
     if (nextIncludePRs || nextIncludeIssues) {
-      if (
-        typeof data.includePRs === "boolean" &&
-        data.includePRs !== includePRs
-      ) {
+      if (typeof data.includePRs === "boolean" && data.includePRs !== includePRs) {
         includePRs = data.includePRs;
         persistIncludePRs(data.includePRs);
         applied.push("include PRs");
       }
-      if (
-        typeof data.includeIssues === "boolean" &&
-        data.includeIssues !== includeIssues
-      ) {
+      if (typeof data.includeIssues === "boolean" && data.includeIssues !== includeIssues) {
         includeIssues = data.includeIssues;
         persistIncludeIssues(data.includeIssues);
         applied.push("include Issues");
       }
     }
 
-    if (
-      data.theme === "system" ||
-      data.theme === "light" ||
-      data.theme === "dark"
-    ) {
+    if (data.theme === "system" || data.theme === "light" || data.theme === "dark") {
       onThemeChange(data.theme);
       applied.push("theme");
     }
 
     if (data.repoSettings !== undefined || data.excludedRepos !== undefined) {
-      const next = normalizeRepoSettingsInput(
-        data.repoSettings,
-        data.excludedRepos,
-      );
+      const next = normalizeRepoSettingsInput(data.repoSettings, data.excludedRepos);
       repoSettings.clear();
       for (const [repo, s] of Object.entries(next)) {
         repoSettings.set(repo, s);
@@ -1251,9 +1210,7 @@
         : `Nothing to import${suffix}.`;
   }
 
-  const repoSuggestions = $derived(
-    repoSuggestionsFrom(items, new Set(repoSettings.keys())),
-  );
+  const repoSuggestions = $derived(repoSuggestionsFrom(items, new Set(repoSettings.keys())));
 
   const orgSuggestions = $derived.by<string[]>(() => {
     const seen = new Set<string>();
@@ -1299,20 +1256,14 @@
     // Keep selectedId valid when the list changes (refresh, tab switch, etc.).
     if (flatItems.length === 0) {
       selectedId = null;
-    } else if (
-      selectedId == null ||
-      !flatItems.some((i) => i.id === selectedId)
-    ) {
+    } else if (selectedId == null || !flatItems.some((i) => i.id === selectedId)) {
       selectedId = flatItems[0].id;
     }
   });
 
   function moveSelection(delta: number) {
     if (flatItems.length === 0) return;
-    const currentIdx =
-      selectedId != null
-        ? flatItems.findIndex((i) => i.id === selectedId)
-        : -1;
+    const currentIdx = selectedId != null ? flatItems.findIndex((i) => i.id === selectedId) : -1;
     const nextIdx = Math.max(
       0,
       Math.min(flatItems.length - 1, (currentIdx < 0 ? 0 : currentIdx) + delta),
@@ -1320,9 +1271,7 @@
     selectedId = flatItems[nextIdx].id;
     // Schedule scrollIntoView after Svelte re-renders the selected class.
     queueMicrotask(() => {
-      const el = document.querySelector<HTMLElement>(
-        `[data-item-id="${selectedId}"]`,
-      );
+      const el = document.querySelector<HTMLElement>(`[data-item-id="${selectedId}"]`);
       el?.scrollIntoView({ block: "nearest" });
     });
   }
@@ -1416,12 +1365,7 @@
   {:else if phase === "bootstrapping"}
     <section class="auth" aria-busy="true">
       <div class="boot-logo-wrap">
-        <svg
-          class="boot-wave"
-          viewBox="0 0 900 300"
-          preserveAspectRatio="none"
-          aria-hidden="true"
-        >
+        <svg class="boot-wave" viewBox="0 0 900 300" preserveAspectRatio="none" aria-hidden="true">
           <defs>
             <linearGradient id="boot-wave-gradient" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stop-color="#cdece5" stop-opacity="0" />
@@ -1441,7 +1385,7 @@
   {:else if phase === "pending" && deviceCode}
     <Auth
       phase="pending"
-      deviceCode={deviceCode}
+      {deviceCode}
       {copied}
       {error}
       onCopyCode={copyCode}
@@ -1449,17 +1393,11 @@
     />
   {:else}
     {#if updateBanner}
-      <div
-        class="update-banner"
-        class:failed={updateBanner.state === "failed"}
-        role="status"
-      >
+      <div class="update-banner" class:failed={updateBanner.state === "failed"} role="status">
         {#if updateBanner.state === "downloading"}
           <span class="update-banner-text">Installing update…</span>
         {:else if updateBanner.state === "failed"}
-          <span class="update-banner-text" title={updateInstallError}>
-            Update failed
-          </span>
+          <span class="update-banner-text" title={updateInstallError}> Update failed </span>
           <button
             class="update-banner-action"
             onclick={() => runUpdateCheck({ interactive: false })}
@@ -1470,9 +1408,7 @@
           <span class="update-banner-text">
             Version {updateBanner.version} is available
           </span>
-          <button class="update-banner-action" onclick={installPendingUpdate}>
-            Update
-          </button>
+          <button class="update-banner-action" onclick={installPendingUpdate}> Update </button>
         {/if}
         {#if updateBanner.state !== "downloading"}
           <button

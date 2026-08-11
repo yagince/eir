@@ -1,12 +1,7 @@
 export type Reviewer = {
   login: string;
   avatar_url: string;
-  state:
-    | "approved"
-    | "changes_requested"
-    | "commented"
-    | "dismissed"
-    | "pending";
+  state: "approved" | "changes_requested" | "commented" | "dismissed" | "pending";
 };
 
 export type Commenter = {

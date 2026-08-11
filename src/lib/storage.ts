@@ -24,12 +24,7 @@ export type Theme = "system" | "light" | "dark";
 
 export function loadTab(): Tab {
   const raw = localStorage.getItem(TAB_KEY);
-  if (
-    raw === "authored" ||
-    raw === "review" ||
-    raw === "mentions" ||
-    raw === "hidden"
-  ) {
+  if (raw === "authored" || raw === "review" || raw === "mentions" || raw === "hidden") {
     return raw;
   }
   return "all";
@@ -92,9 +87,7 @@ export function normalizeRepoSettingsInput(
 ): Record<string, RepoSetting> {
   const out: Record<string, RepoSetting> = {};
   if (newShape && typeof newShape === "object" && !Array.isArray(newShape)) {
-    for (const [repo, val] of Object.entries(
-      newShape as Record<string, unknown>,
-    )) {
+    for (const [repo, val] of Object.entries(newShape as Record<string, unknown>)) {
       if (isValidRepoName(repo) && isRepoSetting(val)) {
         out[repo] = { prs: val.prs, issues: val.issues };
       }
@@ -124,9 +117,7 @@ export function loadRepoSettings(): Record<string, RepoSetting> {
   }
 }
 
-export function persistRepoSettings(
-  settings: Record<string, RepoSetting>,
-): void {
+export function persistRepoSettings(settings: Record<string, RepoSetting>): void {
   localStorage.setItem(REPO_SETTINGS_KEY, JSON.stringify(settings));
 }
 

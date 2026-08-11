@@ -127,9 +127,7 @@
     const els = sectionEl.querySelectorAll<
       HTMLButtonElement | HTMLInputElement | HTMLSelectElement
     >("button, select, input");
-    return Array.from(els).filter(
-      (el) => !el.disabled && el.offsetParent !== null,
-    );
+    return Array.from(els).filter((el) => !el.disabled && el.offsetParent !== null);
   }
 
   function handleArrowNav(e: KeyboardEvent) {
@@ -164,10 +162,7 @@
   <div class="settings-body">
     <label class="setting-row">
       <span class="setting-label">Refresh interval</span>
-      <select
-        value={refreshMs}
-        onchange={(e) => onIntervalChange(Number(e.currentTarget.value))}
-      >
+      <select value={refreshMs} onchange={(e) => onIntervalChange(Number(e.currentTarget.value))}>
         {#each refreshOptions as opt (opt.value)}
           <option value={opt.value}>{opt.label}</option>
         {/each}
@@ -189,10 +184,7 @@
         onchange={(e) => onShowLatestCommentChange(e.currentTarget.checked)}
       />
     </label>
-    <label
-      class="setting-row"
-      title="Turn off to hide PRs across every tab and watched org."
-    >
+    <label class="setting-row" title="Turn off to hide PRs across every tab and watched org.">
       <span class="setting-label">Include PRs</span>
       <input
         type="checkbox"
@@ -201,10 +193,7 @@
         onchange={(e) => onIncludePRsChange(e.currentTarget.checked)}
       />
     </label>
-    <label
-      class="setting-row"
-      title="Turn off to hide Issues across every tab and watched org."
-    >
+    <label class="setting-row" title="Turn off to hide Issues across every tab and watched org.">
       <span class="setting-label">Include Issues</span>
       <input
         type="checkbox"
@@ -215,10 +204,7 @@
     </label>
     <label class="setting-row">
       <span class="setting-label">Theme</span>
-      <select
-        value={theme}
-        onchange={(e) => onThemeChange(e.currentTarget.value as Theme)}
-      >
+      <select value={theme} onchange={(e) => onThemeChange(e.currentTarget.value as Theme)}>
         {#each themeOptions as opt (opt.value)}
           <option value={opt.value}>{opt.label}</option>
         {/each}
@@ -251,19 +237,13 @@
             >· v{updateStatus.update.version} available</span
           >
         {:else if updateStatus.kind === "error"}
-          <span class="setting-hint-inline error-inline"
-            >· {updateStatus.message}</span
-          >
+          <span class="setting-hint-inline error-inline">· {updateStatus.message}</span>
         {/if}
       </span>
       <button
         class="secondary"
-        disabled={updateStatus.kind === "checking" ||
-          updateStatus.kind === "downloading"}
-        onclick={() =>
-          updateStatus.kind === "available"
-            ? onInstallUpdate()
-            : onRunUpdateCheck()}
+        disabled={updateStatus.kind === "checking" || updateStatus.kind === "downloading"}
+        onclick={() => (updateStatus.kind === "available" ? onInstallUpdate() : onRunUpdateCheck())}
       >
         {#if updateStatus.kind === "checking"}
           Checking…
@@ -301,9 +281,9 @@
       <span class="setting-label">Watched orgs / users</span>
       {#if watchedOrgs.size === 0}
         <p class="setting-hint">
-          Only your personal repos and items you're involved with show up in
-          All. Add an org login (e.g. <code>Lecto-inc</code>) to pull in all
-          open items from that org — respects the PR / Issue toggles above.
+          Only your personal repos and items you're involved with show up in All. Add an org login
+          (e.g. <code>Lecto-inc</code>) to pull in all open items from that org — respects the PR /
+          Issue toggles above.
         </p>
       {:else}
         <ul class="excluded-list">
@@ -343,15 +323,15 @@
       <span class="setting-label">Repository overrides</span>
       {#if sortedRepoOverrides.length === 0}
         <p class="setting-hint">
-          None. All repos respect the global Include toggles above. Add a
-          repo to flip PRs or Issues on/off just for that repo. Unchecking
-          both hides the repo entirely (replaces the old Excluded list).
+          None. All repos respect the global Include toggles above. Add a repo to flip PRs or Issues
+          on/off just for that repo. Unchecking both hides the repo entirely (replaces the old
+          Excluded list).
         </p>
       {:else}
         <p class="setting-hint">
-          Per-repo PR / Issue toggles. With the matching global toggle on
-          this just narrows; with the global toggle off, ticking the box
-          here brings that kind back in for this repo via an extra search.
+          Per-repo PR / Issue toggles. With the matching global toggle on this just narrows; with
+          the global toggle off, ticking the box here brings that kind back in for this repo via an
+          extra search.
         </p>
         <ul class="repo-overrides">
           {#each sortedRepoOverrides as [repo, s] (repo)}
@@ -413,9 +393,8 @@
     <div class="setting-section">
       <span class="setting-label">Backup settings</span>
       <p class="setting-hint">
-        Export your configuration (refresh interval, notifications, watched
-        orgs, excluded repos, hidden items, shortcut) as a JSON file, or
-        import a previously saved file to restore it.
+        Export your configuration (refresh interval, notifications, watched orgs, excluded repos,
+        hidden items, shortcut) as a JSON file, or import a previously saved file to restore it.
       </p>
       <div class="setting-buttons">
         <button class="secondary" onclick={onExportSettings}>Export</button>
@@ -442,10 +421,10 @@
         />
       </label>
       <p class="setting-hint">
-        Off by default. When on, records token / sign-in events (no token
-        values) to <code>~/.config/eir/auth-diagnostics.log</code> so an
-        unexpected re-authentication can be traced. The log rotates so it stays
-        small. Turn this on if you keep getting signed out.
+        Off by default. When on, records token / sign-in events (no token values) to <code
+          >~/.config/eir/auth-diagnostics.log</code
+        > so an unexpected re-authentication can be traced. The log rotates so it stays small. Turn this
+        on if you keep getting signed out.
       </p>
     </div>
 
@@ -470,8 +449,9 @@
         <div class="shortcut-item">
           <dt>Mark all as read</dt>
           <dd>
-            <kbd>Cmd</kbd><span class="shortcut-plus">+</span><kbd>Shift</kbd
-            ><span class="shortcut-plus">+</span><kbd>A</kbd>
+            <kbd>Cmd</kbd><span class="shortcut-plus">+</span><kbd>Shift</kbd><span
+              class="shortcut-plus">+</span
+            ><kbd>A</kbd>
           </dd>
         </div>
         <div class="shortcut-item">
@@ -533,8 +513,8 @@
         </div>
       </dl>
       <p class="setting-hint">
-        <span class="shortcut-scope">global</span> works when the popup is hidden.
-        The rest require the popup to be focused.
+        <span class="shortcut-scope">global</span> works when the popup is hidden. The rest require the
+        popup to be focused.
       </p>
     </div>
     {#if error}
