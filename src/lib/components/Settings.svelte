@@ -529,7 +529,10 @@
     display: flex;
     flex-direction: column;
     overflow-y: auto;
-    padding-right: 8px;
+    /* Same trick as .list: reach through the container's right inset so the
+       scrollbar rides the window edge, keeping the rows clear of the bar. */
+    margin-right: calc(-1 * var(--popup-padding));
+    padding-right: var(--scrollbar-width);
   }
 
   .settings-header {

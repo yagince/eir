@@ -1452,7 +1452,7 @@
     display: flex;
     flex-direction: column;
     height: 100vh;
-    padding: 16px;
+    padding: var(--popup-padding);
     box-sizing: border-box;
   }
 

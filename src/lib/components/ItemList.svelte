@@ -1018,8 +1018,11 @@
     flex: 1;
     overflow-y: auto;
     list-style: none;
-    margin: 0;
-    padding: 0;
+    /* Cancel the container's right inset so the scrollbar sits against the
+       window edge instead of floating inside it, then pad the rows back off the
+       bar. Row edges land level with the container's inset on the left. */
+    margin: 0 calc(-1 * var(--popup-padding)) 0 0;
+    padding: 0 var(--scrollbar-width) 0 0;
   }
 
   .list.dim {

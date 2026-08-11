@@ -21,6 +21,13 @@
   --scrollbar-thumb: rgba(0, 0, 0, 0.22);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.35);
 
+  /* Inset of the popup's content from the window edge. Scrolling panes cancel
+     it on their right side (negative margin) so their scrollbar rides the edge
+     rather than floating 16px inside it, which is why this lives here instead
+     of being written into .container by hand. */
+  --popup-padding: 16px;
+  --scrollbar-width: 8px;
+
   --accent: #0969da;
   --accent-bg: rgba(9, 105, 218, 0.12);
   --accent-bg-strong: rgba(9, 105, 218, 0.15);
@@ -98,7 +105,7 @@ body {
 
 .list::-webkit-scrollbar,
 .settings::-webkit-scrollbar {
-  width: 8px;
+  width: var(--scrollbar-width);
 }
 
 .list::-webkit-scrollbar-track,
