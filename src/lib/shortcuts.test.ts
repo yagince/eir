@@ -7,6 +7,10 @@ import {
   type Shortcut,
 } from "./shortcuts";
 
+function input(): HTMLElement {
+  return { tagName: "INPUT" } as HTMLElement;
+}
+
 function event(
   key: string,
   opts: Partial<Pick<KeyboardEvent, "metaKey" | "ctrlKey" | "shiftKey" | "altKey">> & {
@@ -97,10 +101,6 @@ describe("isTextCaretTarget", () => {
 });
 
 describe("dispatchShortcut", () => {
-  function input(): HTMLElement {
-    return { tagName: "INPUT" } as HTMLElement;
-  }
-
   it("runs the matching shortcut and preventDefaults", () => {
     const run = vi.fn();
     const e = event("u");

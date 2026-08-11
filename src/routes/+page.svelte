@@ -149,11 +149,11 @@
   ) {
     const n = new Notification(title, { body });
     if (onClick || url) {
-      n.onclick = () => {
+      n.addEventListener("click", () => {
         if (onClick) onClick();
         else if (url) void openUrl(url);
         n.close();
-      };
+      });
     }
   }
 
@@ -414,9 +414,9 @@
         }
       }
     } catch (e) {
-      const message = String(e);
-      console.warn("[eir] update check failed:", message);
-      updateStatus = { kind: "error", message };
+      const reason = String(e);
+      console.warn("[eir] update check failed:", reason);
+      updateStatus = { kind: "error", message: reason };
     }
   }
 
@@ -459,10 +459,10 @@
       await update.downloadAndInstall();
       await relaunch();
     } catch (e) {
-      const message = String(e);
-      console.warn("[eir] update install failed:", message);
-      updateStatus = { kind: "error", message };
-      updateInstallError = message;
+      const reason = String(e);
+      console.warn("[eir] update install failed:", reason);
+      updateStatus = { kind: "error", message: reason };
+      updateInstallError = reason;
     }
   }
 

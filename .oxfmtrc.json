@@ -1,0 +1,22 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  // .svelte formatting is opt-in: oxfmt delegates it to prettier-plugin-svelte
+  // and needs svelte/compiler resolvable (it is, via the svelte devDependency).
+  // Leave this out and oxfmt silently skips every .svelte file — which here is
+  // 80% of the frontend — without reporting anything as unformatted.
+  "svelte": true,
+  // Scope is the app frontend: src/ plus the root svelte/vite config. Without
+  // this, a bare `oxfmt` reaches for everything it can parse and rewrites the
+  // published docs/ site, the agent skill files, every .md, the workflow YAML,
+  // and src-tauri/tauri.conf.json.
+  "ignorePatterns": [
+    "**/*.md",
+    "docs/**",
+    ".github/**",
+    ".vscode/**",
+    "src-tauri/**",
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml"
+  ]
+}

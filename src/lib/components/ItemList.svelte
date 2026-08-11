@@ -195,11 +195,14 @@
     }
   }
 
+  /// Zero-padded to two digits, for the `YYYY-MM-DD` and `HH:MM` strings the
+  /// native date and time inputs expect.
+  const pad = (n: number) => n.toString().padStart(2, "0");
+
   /// Seed both pickers with "1 hour from now" so opening custom mode lets
   /// the user nudge a sensible default rather than type from scratch.
   function seedCustomDefaults() {
     const d = new Date(Date.now() + 60 * 60 * 1000);
-    const pad = (n: number) => n.toString().padStart(2, "0");
     customDate = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
     customHourStr = pad(d.getHours());
     customMinuteStr = pad(d.getMinutes());
@@ -209,7 +212,6 @@
   /// the native picker greys out past calendar days.
   function todayLocalIso(): string {
     const d = new Date();
-    const pad = (n: number) => n.toString().padStart(2, "0");
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   }
 
@@ -225,7 +227,6 @@
     const m = Number.parseInt(customMinuteStr, 10);
     if (!Number.isFinite(h) || h < 0 || h > 23) return null;
     if (!Number.isFinite(m) || m < 0 || m > 59) return null;
-    const pad = (n: number) => n.toString().padStart(2, "0");
     const t = new Date(`${customDate}T${pad(h)}:${pad(m)}`).getTime();
     if (!Number.isFinite(t)) return null;
     const sec = Math.floor(t / 1000);

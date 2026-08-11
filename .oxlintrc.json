@@ -1,0 +1,28 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  // Scope is the app frontend. docs/ is the published landing page, a separate
+  // hand-written artifact that happens to contain JS.
+  "ignorePatterns": ["docs/**"],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "error"
+  },
+  "rules": {
+    // Every sort call in this codebase runs on a fresh array built by spreading
+    // a Set or Map (`[...seen].sort()`), so there is no shared array to mutate.
+    // toSorted() would allocate a second copy to protect a throwaway one.
+    "unicorn/no-array-sort": "off"
+  },
+  "overrides": [
+    {
+      // oxlint parses only the <script> block of a .svelte file, so anything the
+      // markup touches looks untouched from here. `bind:this` targets are the
+      // common case: declared in the script, assigned by the template.
+      "files": ["**/*.svelte"],
+      "rules": {
+        "no-unassigned-vars": "off"
+      }
+    }
+  ]
+}
