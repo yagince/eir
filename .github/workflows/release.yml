@@ -138,6 +138,7 @@ jobs:
           # happens before the updater .app.tar.gz is packed, so the payload
           # the updater installs carries a stapled ticket too. Adds a few
           # minutes to the macOS jobs while Apple's service processes it.
+          # Note it only covers the .app — see the DMG step below.
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -153,6 +154,31 @@ jobs:
           # input here was a typo for uploadUpdaterJson and silently ignored.)
           uploadUpdaterJson: false
           args: --target ${{ matrix.target }}
+
+      # tauri-cli notarizes the .app but only *signs* the .dmg it then wraps it
+      # in, so a freshly downloaded image is still refused on open ("Apple cannot
+      # check it for malicious software") even though the app inside is fine —
+      # v0.17.6 shipped that way until the DMGs were notarized by hand. Notarize
+      # and staple the image itself and replace the asset tauri-action already
+      # uploaded. `stapler staple` fails when Apple did not accept the
+      # submission, so a rejection fails the job instead of passing quietly.
+      - name: Notarize and staple the DMG
+        if: startsWith(matrix.os, 'macos')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          TAG: ${{ needs.create-release.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          DMG=$(ls src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg)
+          echo "notarizing $DMG"
+          xcrun notarytool submit "$DMG" \
+            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "$DMG"
+          gh release upload "$TAG" "$DMG" --clobber --repo "$GITHUB_REPOSITORY"
 
       # tauri-cli degrades silently on both halves of this: no APPLE_CERTIFICATE
       # means an ad-hoc signature, and no APPLE_ID/APPLE_PASSWORD/APPLE_TEAM_ID
@@ -176,6 +202,13 @@ jobs:
           xcrun stapler validate "$APP" \
             || { echo "::error::no stapled notarization ticket (APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID secrets missing?)"; exit 1; }
           spctl --assess --type execute -vvv "$APP"
+          # The image users actually download. `--type install` is the assessment
+          # macOS runs when a quarantined DMG is opened, so this is the check that
+          # would have caught v0.17.6's un-notarized DMGs.
+          DMG=$(ls src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg)
+          xcrun stapler validate "$DMG" \
+            || { echo "::error::DMG has no stapled ticket — it will be refused on open"; exit 1; }
+          spctl --assess --type install -vvv "$DMG"
 
   # The matrix jobs used to each download-merge-reupload latest.json. Those
   # unsynchronised read-modify-write cycles race, and the last writer clobbers
