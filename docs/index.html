@@ -167,16 +167,16 @@
         <ol>
           <li>Download the <code>.dmg</code> for your architecture above.</li>
           <li>Open the DMG and drag <strong>eir.app</strong> into <code>/Applications</code>.</li>
-          <li>
-            Remove the quarantine attribute so Gatekeeper lets it launch (the bundle is ad-hoc
-            signed — no Apple Developer ID yet):
-            <pre><code id="xattr-cmd">xattr -rd com.apple.quarantine /Applications/eir.app</code><button class="copy-btn" data-copy-target="xattr-cmd" aria-label="Copy command">Copy</button></pre>
-          </li>
           <li>Launch eir and sign in with the GitHub device flow.</li>
         </ol>
         <p class="note">
-          Subsequent launches — including after the in-app updater swaps the binary — don't need
-          the <code>xattr</code> step again.
+          Signed with an Apple Developer ID and notarized, so Gatekeeper accepts it as-is — no
+          <code>xattr</code> incantation, no "damaged and can't be opened" dialog.
+        </p>
+        <p class="note">
+          Coming from v0.17.5 or earlier? Those builds were ad-hoc signed, which also left the
+          in-app updater unable to relaunch after installing an update. Replace the old copy with
+          this DMG once, and updates install and relaunch on their own from then on.
         </p>
 
         <h3>Windows</h3>
