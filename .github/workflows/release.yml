@@ -133,5 +133,97 @@ jobs:
           # than triggering tauri-action's own "find or create" path (which
           # races across parallel matrix jobs and produces duplicate drafts).
           releaseId: ${{ needs.create-release.outputs.release_id }}
-          includeUpdaterJson: true
+          # Updater .sig assets still upload per job, but latest.json is
+          # assembled once by the updater-manifest job below. Each matrix job
+          # rewriting it concurrently is a lost-update race that dropped the
+          # Windows entries in v0.17.5. (The previous `includeUpdaterJson`
+          # input here was a typo for uploadUpdaterJson and silently ignored.)
+          uploadUpdaterJson: false
           args: --target ${{ matrix.target }}
+
+  # The matrix jobs used to each download-merge-reupload latest.json. Those
+  # unsynchronised read-modify-write cycles race, and the last writer clobbers
+  # whichever platform entries it never saw — all four builds still report
+  # success, so the broken manifest is invisible in CI. Building the manifest
+  # exactly once, after every upload finished, removes the race and fails
+  # loudly if any platform's updater artifact or signature is missing.
+  updater-manifest:
+    name: assemble updater manifest
+    needs: [create-release, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build and upload latest.json
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RELEASE_ID: ${{ needs.create-release.outputs.release_id }}
+          TAG: ${{ needs.create-release.outputs.tag_name }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess
+          from datetime import datetime, timezone
+
+          repo = os.environ["REPO"]
+          release_id = os.environ["RELEASE_ID"]
+          tag = os.environ["TAG"]
+
+          def gh(*args):
+              out = subprocess.run(["gh", "api", *args], check=True, capture_output=True)
+              return out.stdout.decode()
+
+          assets = json.loads(gh(f"repos/{repo}/releases/{release_id}/assets?per_page=100"))
+          by_name = {a["name"]: a for a in assets}
+
+          # Updater artifact suffix -> latest.json platform keys, mirroring
+          # what tauri-action wrote for v0.17.4. The .sig sibling holds the
+          # signature; the API asset URL is what the in-app updater fetches
+          # (works for drafts and stays valid after publishing).
+          MAPPING = [
+              ("_aarch64.app.tar.gz", ["darwin-aarch64", "darwin-aarch64-app"]),
+              ("_x64.app.tar.gz", ["darwin-x86_64", "darwin-x86_64-app"]),
+              ("_amd64.AppImage", ["linux-x86_64", "linux-x86_64-appimage"]),
+              ("_amd64.deb", ["linux-x86_64-deb"]),
+              (".x86_64.rpm", ["linux-x86_64-rpm"]),
+              (".msi", ["windows-x86_64", "windows-x86_64-msi"]),
+              ("-setup.exe", ["windows-x86_64-nsis"]),
+          ]
+
+          platforms = {}
+          missing = []
+          for suffix, keys in MAPPING:
+              artifact = next((a for a in assets if a["name"].endswith(suffix)), None)
+              sig = by_name.get(artifact["name"] + ".sig") if artifact else None
+              if artifact is None or sig is None:
+                  missing.append(suffix)
+                  continue
+              signature = gh(
+                  f"repos/{repo}/releases/assets/{sig['id']}",
+                  "-H", "Accept: application/octet-stream",
+              ).strip()
+              for key in keys:
+                  platforms[key] = {"signature": signature, "url": artifact["url"]}
+
+          if missing:
+              raise SystemExit(f"updater artifacts missing for suffixes: {missing}")
+
+          manifest = {
+              "version": tag.lstrip("v"),
+              "notes": "",
+              "pub_date": datetime.now(timezone.utc)
+                  .isoformat(timespec="milliseconds")
+                  .replace("+00:00", "Z"),
+              "platforms": platforms,
+          }
+          with open("latest.json", "w") as f:
+              json.dump(manifest, f, indent=2)
+          print(f"latest.json assembled with {len(platforms)} platform entries")
+
+          # Reruns of this job would otherwise hit "asset already exists".
+          if "latest.json" in by_name:
+              gh("--method", "DELETE",
+                 f"repos/{repo}/releases/assets/{by_name['latest.json']['id']}")
+          gh("--method", "POST",
+             "-H", "Content-Type: application/json",
+             "--input", "latest.json",
+             f"https://uploads.github.com/repos/{repo}/releases/{release_id}/assets?name=latest.json")
+          PY
