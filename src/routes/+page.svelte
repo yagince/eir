@@ -3,7 +3,7 @@
   import { getVersion } from "@tauri-apps/api/app";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { isPermissionGranted, requestPermission } from "@tauri-apps/plugin-notification";
+  import { ensureNotificationPermission, showNotification } from "$lib/notify";
   import { relaunch } from "@tauri-apps/plugin-process";
   import { check as checkForUpdate, Update } from "@tauri-apps/plugin-updater";
   import { ask, message, open, save } from "@tauri-apps/plugin-dialog";
@@ -134,29 +134,6 @@
   let searchVisible = $state(false);
   let unreadOnly = $state<boolean>(loadUnreadOnly());
   let viewMode = $state<ViewMode>(loadViewMode());
-
-  // The notification plugin's sendNotification() just invokes
-  // `new window.Notification(title, options)` under the hood and throws away
-  // the Notification instance — its desktop backend never emits the
-  // `actionPerformed` event that `onAction` listens for (that wiring only
-  // exists on iOS/Android). So to handle clicks we create the Notification
-  // ourselves and attach `.onclick` directly.
-  /// `onClick` wins over `url` when both are given.
-  function showNotification(
-    title: string,
-    body: string,
-    onActivate: { url?: string; onClick?: () => void } = {},
-  ) {
-    const n = new Notification(title, { body });
-    const { url, onClick } = onActivate;
-    if (onClick || url) {
-      n.addEventListener("click", () => {
-        if (onClick) onClick();
-        else if (url) void openUrl(url);
-        n.close();
-      });
-    }
-  }
 
   type UpdateStatus =
     | { kind: "idle" }
@@ -392,19 +369,27 @@
         `[eir] update check: ${update.version} available (current ${update.currentVersion})`,
       );
       updateStatus = { kind: "available", update };
+      // Kept in its own try: an update is available either way, and letting a
+      // notification failure fall through to the outer catch would overwrite
+      // that with an error state and take the banner down with it. That is
+      // exactly what shipped in v0.17.7 and v1.0.0.
       if (!opts.interactive && notifyEnabled) {
-        if (await ensureNotificationPermission()) {
-          showNotification(
-            "eir update available",
-            `Version ${update.version} is ready to install.`,
-            {
-              // Land them on the popup, where the banner offers the install in
-              // one click. macOS suppresses these banners while eir is
-              // frontmost and they vanish quickly regardless, so the popup
-              // banner — not this notification — is the durable signal.
-              onClick: () => void invoke("show_popup"),
-            },
-          );
+        try {
+          if (await ensureNotificationPermission()) {
+            showNotification(
+              "eir update available",
+              `Version ${update.version} is ready to install.`,
+              {
+                // Land them on the popup, where the banner offers the install
+                // in one click. macOS suppresses these banners while eir is
+                // frontmost and they vanish quickly regardless, so the popup
+                // banner — not this notification — is the durable signal.
+                onClick: () => void invoke("show_popup"),
+              },
+            );
+          }
+        } catch (e) {
+          console.warn("[eir] update notification failed:", String(e));
         }
       }
     } catch (e) {
@@ -487,11 +472,6 @@
     showNotification("eir test notification", "Click to open the eir repo.", {
       url: "https://github.com/yagince/eir",
     });
-  }
-
-  async function ensureNotificationPermission(): Promise<boolean> {
-    if (await isPermissionGranted()) return true;
-    return (await requestPermission()) === "granted";
   }
 
   onMount(async () => {
