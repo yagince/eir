@@ -61,9 +61,11 @@
     type SettingsExport,
   } from "$lib/settings-import";
   import { dispatchShortcut, isEditableTarget, type Shortcut } from "$lib/shortcuts";
+  import { updateBannerFor } from "$lib/update-banner";
   import Auth from "$lib/components/Auth.svelte";
   import ItemList from "$lib/components/ItemList.svelte";
   import Settings from "$lib/components/Settings.svelte";
+  import UpdateBanner from "$lib/components/UpdateBanner.svelte";
 
   type DeviceCode = {
     user_code: string;
@@ -442,18 +444,17 @@
     }
   }
 
-  // Which banner, if any, belongs at the top of the popup.
-  const updateBanner = $derived.by(() => {
-    if (updateStatus.kind === "downloading") return { state: "downloading" as const };
-    if (updateInstallError) return { state: "failed" as const };
-    if (
-      updateStatus.kind === "available" &&
-      updateStatus.update.version !== dismissedUpdateVersion
-    ) {
-      return { state: "available" as const, version: updateStatus.update.version };
-    }
-    return null;
-  });
+  // Which banner, if any, belongs at the top of the popup. The decision lives in
+  // $lib/update-banner so the precedence and the per-version dismissal rule are
+  // pinned by tests rather than implied by this expression.
+  const updateBanner = $derived(
+    updateBannerFor({
+      availableVersion: updateStatus.kind === "available" ? updateStatus.update.version : null,
+      downloading: updateStatus.kind === "downloading",
+      installError: updateInstallError,
+      dismissedVersion: dismissedUpdateVersion,
+    }),
+  );
 
   function dismissUpdateBanner() {
     if (updateStatus.kind === "available") {
@@ -1376,34 +1377,13 @@
     />
   {:else}
     {#if updateBanner}
-      <div class="update-banner" class:failed={updateBanner.state === "failed"} role="status">
-        {#if updateBanner.state === "downloading"}
-          <span class="update-banner-text">Installing update…</span>
-        {:else if updateBanner.state === "failed"}
-          <span class="update-banner-text" title={updateInstallError}> Update failed </span>
-          <button
-            class="update-banner-action"
-            onclick={() => runUpdateCheck({ interactive: false })}
-          >
-            Retry
-          </button>
-        {:else}
-          <span class="update-banner-text">
-            Version {updateBanner.version} is available
-          </span>
-          <button class="update-banner-action" onclick={installPendingUpdate}> Update </button>
-        {/if}
-        {#if updateBanner.state !== "downloading"}
-          <button
-            class="update-banner-dismiss"
-            onclick={dismissUpdateBanner}
-            title="Dismiss"
-            aria-label="Dismiss update notice"
-          >
-            ×
-          </button>
-        {/if}
-      </div>
+      <UpdateBanner
+        banner={updateBanner}
+        installError={updateInstallError}
+        onUpdate={installPendingUpdate}
+        onRetry={() => runUpdateCheck({ interactive: false })}
+        onDismiss={dismissUpdateBanner}
+      />
     {/if}
     <ItemList
       {loading}
@@ -1451,73 +1431,6 @@
     height: 100vh;
     padding: var(--popup-padding);
     box-sizing: border-box;
-  }
-
-  /* Sits above ItemList's toolbar, outside the scrolling list, so a pending
-     update stays visible however far down the list you are. */
-  .update-banner {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex: none;
-    margin-bottom: 8px;
-    padding: 6px 6px 6px 10px;
-    border: 1px solid var(--accent-bg-strong);
-    border-radius: 6px;
-    background: var(--accent-bg);
-    font-size: 12px;
-    color: var(--fg);
-  }
-
-  .update-banner.failed {
-    border-color: var(--danger);
-    background: var(--danger-bg-faint);
-  }
-
-  .update-banner-text {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-  }
-
-  .update-banner-action {
-    flex: none;
-    padding: 4px 10px;
-    border: none;
-    border-radius: 6px;
-    background: var(--accent);
-    color: var(--on-accent);
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-  }
-
-  .update-banner-action:hover {
-    background: var(--accent-bg-hover);
-  }
-
-  .update-banner-dismiss {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 20px;
-    height: 20px;
-    padding: 0;
-    border: none;
-    border-radius: 4px;
-    background: transparent;
-    color: var(--fg-muted);
-    font-size: 15px;
-    line-height: 1;
-    cursor: pointer;
-  }
-
-  .update-banner-dismiss:hover {
-    background: var(--hover-bg);
-    color: var(--fg);
   }
 
   .progress-bar {
