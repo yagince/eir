@@ -104,30 +104,56 @@ export function normalizeRepoSettingsInput(
   return out;
 }
 
-export function loadRepoSettings(): Record<string, RepoSetting> {
+/// JSON.parse, or undefined when the slot is empty or unparseable.
+///
+/// Each key is parsed on its own so one corrupt value can't take another down
+/// with it: both parses used to sit inside a single try, which meant leftover
+/// garbage in the legacy key discarded every per-repo override the user had.
+function parseStored(key: string): unknown {
+  const raw = localStorage.getItem(key);
+  if (!raw) return undefined;
   try {
-    const raw = localStorage.getItem(REPO_SETTINGS_KEY);
-    const legacy = localStorage.getItem(EXCLUDED_REPOS_KEY);
-    return normalizeRepoSettingsInput(
-      raw ? JSON.parse(raw) : undefined,
-      legacy ? JSON.parse(legacy) : undefined,
-    );
+    return JSON.parse(raw);
   } catch {
-    return {};
+    return undefined;
   }
+}
+
+export function loadRepoSettings(): Record<string, RepoSetting> {
+  return normalizeRepoSettingsInput(
+    parseStored(REPO_SETTINGS_KEY),
+    parseStored(EXCLUDED_REPOS_KEY),
+  );
 }
 
 export function persistRepoSettings(settings: Record<string, RepoSetting>): void {
   localStorage.setItem(REPO_SETTINGS_KEY, JSON.stringify(settings));
 }
 
+/// Elements of the right type from a stored JSON array, or `[]`.
+///
+/// The type check is not decoration: these results go straight into
+/// `new SvelteSet(...)` while the popup's module is initialising, so a stored
+/// value that parses but isn't iterable — `5`, or an object — used to throw
+/// there and leave the popup rendering nothing at all, with no way back short of
+/// clearing localStorage by hand. Filtering per element also means one bad entry
+/// costs only itself.
+function loadTypedList<T>(key: string, keep: (v: unknown) => v is T): T[] {
+  const parsed = parseStored(key);
+  if (!Array.isArray(parsed)) return [];
+  return parsed.filter(keep);
+}
+
+function isFiniteNumber(v: unknown): v is number {
+  return typeof v === "number" && Number.isFinite(v);
+}
+
+function isNonEmptyString(v: unknown): v is string {
+  return typeof v === "string" && v.length > 0;
+}
+
 export function loadHiddenItems(): number[] {
-  try {
-    const raw = localStorage.getItem(HIDDEN_ITEMS_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
+  return loadTypedList(HIDDEN_ITEMS_KEY, isFiniteNumber);
 }
 
 export function persistHiddenItems(values: Iterable<number>): void {
@@ -135,12 +161,7 @@ export function persistHiddenItems(values: Iterable<number>): void {
 }
 
 export function loadPinnedItems(): number[] {
-  try {
-    const raw = localStorage.getItem(PINNED_ITEMS_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
+  return loadTypedList(PINNED_ITEMS_KEY, isFiniteNumber);
 }
 
 export function persistPinnedItems(values: Iterable<number>): void {
@@ -148,12 +169,7 @@ export function persistPinnedItems(values: Iterable<number>): void {
 }
 
 export function loadWatchedOrgs(): string[] {
-  try {
-    const raw = localStorage.getItem(WATCHED_ORGS_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
+  return loadTypedList(WATCHED_ORGS_KEY, isNonEmptyString);
 }
 
 export function persistWatchedOrgs(values: Iterable<string>): void {

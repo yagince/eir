@@ -42,6 +42,13 @@
     <p class="copy-status" class:ok={props.copied}>
       {props.copied ? "✓ Copied to clipboard" : "Tap to copy"}
     </p>
+    <!-- copyCode() sets `error` without leaving the pending phase, so without
+         this the realistic failure — WebKit rejecting a clipboard write once the
+         popup loses focus — showed nothing at all and the status line sat on
+         "Tap to copy" as if the click had never happened. -->
+    {#if props.error}
+      <p class="error">{props.error}</p>
+    {/if}
     <button
       class="secondary"
       onclick={() => props.onReopenVerification(props.deviceCode.verification_uri)}
