@@ -588,6 +588,13 @@ describe("ItemList row actions", () => {
   });
 });
 
+async function openMenu(index = 0) {
+  const triggers = screen.getAllByRole("button", { name: /Snooze$|Edit snooze/ });
+  await fireEvent.click(triggers[index]);
+  await settle();
+  return screen.getByRole("menu", { name: "Snooze options" });
+}
+
 describe("ItemList snooze menu", () => {
   // Fake only Date: the menu's focus transfer rides on `queueMicrotask` and
   // Svelte flushes through microtasks too, so faking the whole timer surface
@@ -600,13 +607,6 @@ describe("ItemList snooze menu", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
-
-  async function openMenu(index = 0) {
-    const triggers = screen.getAllByRole("button", { name: /Snooze$|Edit snooze/ });
-    await fireEvent.click(triggers[index]);
-    await settle();
-    return screen.getByRole("menu", { name: "Snooze options" });
-  }
 
   it("opens the menu for the row whose trigger was clicked", async () => {
     mount({
