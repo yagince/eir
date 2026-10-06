@@ -179,6 +179,21 @@
     snoozeMenuOpenId = null;
   }
 
+  // Document-level listeners installed while the Snooze menu is open (see the
+  // `$effect` below).
+  function onDocMouseDown(e: MouseEvent) {
+    const target = e.target as Element | null;
+    if (target?.closest(".snooze-wrap")) return;
+    closeSnoozeMenu();
+  }
+
+  function onDocKey(e: KeyboardEvent) {
+    if (e.key === "Escape") {
+      closeSnoozeMenu();
+      e.stopPropagation();
+    }
+  }
+
   function toggleSnoozeMenu(id: number) {
     if (snoozeMenuOpenId === id) {
       closeSnoozeMenu();
@@ -305,17 +320,6 @@
   // — opening one and clicking anywhere else just dismisses it.
   $effect(() => {
     if (snoozeMenuOpenId == null) return;
-    function onDocMouseDown(e: MouseEvent) {
-      const target = e.target as Element | null;
-      if (target?.closest(".snooze-wrap")) return;
-      closeSnoozeMenu();
-    }
-    function onDocKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        closeSnoozeMenu();
-        e.stopPropagation();
-      }
-    }
     document.addEventListener("mousedown", onDocMouseDown);
     document.addEventListener("keydown", onDocKey, true);
     return () => {
