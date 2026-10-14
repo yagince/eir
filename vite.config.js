@@ -51,5 +51,9 @@ export default defineConfig(async () => ({
     // Skip Claude's worktree mirrors of this repo; otherwise vitest picks up
     // their duplicate test files and chokes on the stale tsconfig paths.
     exclude: ["node_modules", ".claude/**", "src-tauri/**"],
+    // Node 25+ ships its own `localStorage` global, which is undefined unless
+    // `--localstorage-file` is given, and it shadows jsdom's implementation.
+    // Turn it off in the test workers so jsdom's Web Storage is used.
+    execArgv: ["--no-webstorage"],
   },
 }));
