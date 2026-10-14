@@ -2,7 +2,7 @@
 import "@testing-library/jest-dom/vitest";
 import { render, screen } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
-import Auth from "$lib/components/Auth.svelte";
+import Auth from "#lib/components/Auth.svelte";
 
 /// Shape of what `start_device_flow` hands back on the Rust side. Only
 /// user_code and verification_uri reach the markup; the rest are carried

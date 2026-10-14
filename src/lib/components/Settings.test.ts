@@ -4,8 +4,8 @@ import { fireEvent, render, screen, within } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { SvelteMap, SvelteSet } from "svelte/reactivity";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import Settings from "$lib/components/Settings.svelte";
-import type { RepoSetting } from "$lib/storage";
+import Settings from "#lib/components/Settings.svelte";
+import type { RepoSetting } from "#lib/storage.ts";
 
 /// Every callback the panel can reach, so a test can assert that pressing one
 /// control leaves the others alone.

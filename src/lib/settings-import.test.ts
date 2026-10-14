@@ -3,7 +3,7 @@ import {
   parseImportedSettings,
   SETTINGS_EXPORT_VERSION,
   type SettingsExport,
-} from "$lib/settings-import";
+} from "#lib/settings-import.ts";
 
 function exported(overrides: Partial<SettingsExport> = {}): unknown {
   return { version: SETTINGS_EXPORT_VERSION, ...overrides };

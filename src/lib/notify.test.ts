@@ -10,7 +10,7 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
   requestPermission: () => requestPermission(),
 }));
 
-const { ensureNotificationPermission, showNotification } = await import("$lib/notify");
+const { ensureNotificationPermission, showNotification } = await import("#lib/notify.ts");
 
 /// Stands in for `tauri-plugin-notification`'s window.Notification shim, which
 /// carries onclick and close and nothing else. jsdom's built-in Notification is

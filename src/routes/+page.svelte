@@ -3,7 +3,7 @@
   import { getVersion } from "@tauri-apps/api/app";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { openUrl } from "@tauri-apps/plugin-opener";
-  import { ensureNotificationPermission, showNotification } from "$lib/notify";
+  import { ensureNotificationPermission, showNotification } from "#lib/notify.ts";
   import { relaunch } from "@tauri-apps/plugin-process";
   import { check as checkForUpdate, Update } from "@tauri-apps/plugin-updater";
   import { ask, message, open, save } from "@tauri-apps/plugin-dialog";
@@ -21,7 +21,7 @@
     groupByRepo,
     itemKey,
     repoSuggestionsFrom,
-  } from "$lib/list";
+  } from "#lib/list.ts";
   import {
     isValidRepoName,
     loadHiddenItems,
@@ -52,20 +52,20 @@
     persistWatchedOrgs,
     type RepoSetting,
     type Theme,
-  } from "$lib/storage";
-  import type { NotificationItem, Tab, ViewMode, WatchedItem } from "$lib/types";
+  } from "#lib/storage.ts";
+  import type { NotificationItem, Tab, ViewMode, WatchedItem } from "#lib/types.ts";
   import {
     type ImportedSettings,
     parseImportedSettings,
     SETTINGS_EXPORT_VERSION,
     type SettingsExport,
-  } from "$lib/settings-import";
-  import { dispatchShortcut, isEditableTarget, type Shortcut } from "$lib/shortcuts";
-  import { updateBannerFor } from "$lib/update-banner";
-  import Auth from "$lib/components/Auth.svelte";
-  import ItemList from "$lib/components/ItemList.svelte";
-  import Settings from "$lib/components/Settings.svelte";
-  import UpdateBanner from "$lib/components/UpdateBanner.svelte";
+  } from "#lib/settings-import.ts";
+  import { dispatchShortcut, isEditableTarget, type Shortcut } from "#lib/shortcuts.ts";
+  import { updateBannerFor } from "#lib/update-banner.ts";
+  import Auth from "#lib/components/Auth.svelte";
+  import ItemList from "#lib/components/ItemList.svelte";
+  import Settings from "#lib/components/Settings.svelte";
+  import UpdateBanner from "#lib/components/UpdateBanner.svelte";
 
   type DeviceCode = {
     user_code: string;
@@ -445,7 +445,7 @@
   }
 
   // Which banner, if any, belongs at the top of the popup. The decision lives in
-  // $lib/update-banner so the precedence and the per-version dismissal rule are
+  // #lib/update-banner so the precedence and the per-version dismissal rule are
   // pinned by tests rather than implied by this expression.
   const updateBanner = $derived(
     updateBannerFor({

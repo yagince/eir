@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { UpdateBanner } from "$lib/update-banner";
+  import type { UpdateBanner } from "#lib/update-banner.ts";
 
   /// Rendered above the list, outside its scroll container, so a pending update
   /// stays visible however far down the list the user is.
