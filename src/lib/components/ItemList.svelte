@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { flattenCommentBody, itemKey, relativeTime } from "$lib/list";
-  import type { NotificationItem, RepoGroup, Tab, ViewMode, WatchedItem } from "$lib/types";
+  import { flattenCommentBody, itemKey, relativeTime } from "#lib/list.ts";
+  import type { NotificationItem, RepoGroup, Tab, ViewMode, WatchedItem } from "#lib/types.ts";
 
   type Props = {
     loading: boolean;

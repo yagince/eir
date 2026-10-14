@@ -1,4 +1,4 @@
-import { normalizeRepoSettingsInput, type RepoSetting, type Theme } from "$lib/storage";
+import { normalizeRepoSettingsInput, type RepoSetting, type Theme } from "#lib/storage.ts";
 
 /// Bumped when the on-disk shape changes incompatibly. An export carrying any
 /// other value is rejected outright rather than partially applied.

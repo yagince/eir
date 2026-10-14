@@ -2,8 +2,8 @@
   import { onMount } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import type { Update } from "@tauri-apps/plugin-updater";
-  import type { RepoSetting, Theme } from "$lib/storage";
-  import { isTextCaretTarget } from "$lib/shortcuts";
+  import type { RepoSetting, Theme } from "#lib/storage.ts";
+  import { isTextCaretTarget } from "#lib/shortcuts.ts";
 
   type UpdateStatus =
     | { kind: "idle" }

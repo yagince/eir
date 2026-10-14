@@ -1,5 +1,7 @@
 import { defineConfig } from "vite";
 import { sveltekit } from "@sveltejs/kit/vite";
+import adapter from "@sveltejs/adapter-static";
+import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
 import { svelteTesting } from "@testing-library/svelte/vite";
 
 // @ts-expect-error process is a nodejs global
@@ -10,7 +12,19 @@ export default defineConfig(async () => ({
   // svelteTesting resolves Svelte's browser entry points under vitest and
   // unmounts rendered components between tests. Without it, component tests get
   // the SSR build and leak DOM into each other.
-  plugins: [sveltekit(), svelteTesting()],
+  plugins: [
+    // Tauri doesn't have a Node.js server to do proper SSR, so we use
+    // adapter-static with a fallback to index.html to put the site in SPA mode.
+    // See: https://svelte.dev/docs/kit/single-page-apps
+    // See: https://v2.tauri.app/start/frontend/sveltekit/
+    sveltekit({
+      preprocess: vitePreprocess(),
+      adapter: adapter({
+        fallback: "index.html",
+      }),
+    }),
+    svelteTesting(),
+  ],
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

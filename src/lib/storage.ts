@@ -1,4 +1,4 @@
-import type { Tab, ViewMode } from "$lib/types";
+import type { Tab, ViewMode } from "#lib/types.ts";
 
 export const TAB_KEY = "eir.tab";
 export const INTERVAL_KEY = "eir.refreshMs";

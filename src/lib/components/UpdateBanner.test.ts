@@ -2,8 +2,8 @@
 import "@testing-library/jest-dom/vitest";
 import { render, screen } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
-import UpdateBanner from "$lib/components/UpdateBanner.svelte";
-import type { UpdateBanner as Banner } from "$lib/update-banner";
+import UpdateBanner from "#lib/components/UpdateBanner.svelte";
+import type { UpdateBanner as Banner } from "#lib/update-banner.ts";
 
 function mount(banner: Banner, installError: string | null = null) {
   const onUpdate = vi.fn();

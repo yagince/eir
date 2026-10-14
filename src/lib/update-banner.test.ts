@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { updateBannerFor, type UpdateBannerInput } from "$lib/update-banner";
+import { updateBannerFor, type UpdateBannerInput } from "#lib/update-banner.ts";
 
 function input(overrides: Partial<UpdateBannerInput> = {}): UpdateBannerInput {
   return {

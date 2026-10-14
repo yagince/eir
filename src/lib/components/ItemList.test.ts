@@ -2,8 +2,8 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import ItemList from "$lib/components/ItemList.svelte";
-import type { NotificationItem, RepoGroup, Tab, ViewMode, WatchedItem } from "$lib/types";
+import ItemList from "#lib/components/ItemList.svelte";
+import type { NotificationItem, RepoGroup, Tab, ViewMode, WatchedItem } from "#lib/types.ts";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "all", label: "All" },
