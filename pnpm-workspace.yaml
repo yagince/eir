@@ -2,5 +2,8 @@ packages:
   - "."
 
 overrides:
+  # parse5-parser-stream@8.1.0 requires parse5>=8.1.0 (tokenizer.flushCharacters),
+  # but its dependency range (^8.0.0) lets pnpm resolve the older 8.0.1.
+  parse5: 8.1.0
   postcss: 8.5.26
   undici: 7.29.0
